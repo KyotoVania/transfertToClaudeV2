@@ -345,4 +345,4 @@ export const improvedHarmonicGridScene: SceneDefinition<HarmonicGridSettings> = 
     schema,
   },
 };
-
+export default improvedHarmonicGridScene;

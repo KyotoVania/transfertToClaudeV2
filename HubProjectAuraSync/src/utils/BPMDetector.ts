@@ -10,20 +10,21 @@ export class BPMDetector {
     private beatHistory: BeatInterval[] = [];
     private lastBeatTime: number = 0;
     private bpmHistory: number[] = [];
-    private readonly historySize = 20;
-    private readonly minBPM = 60;
-    private readonly maxBPM = 180;
+    private readonly historySize = 30; // Increased history size
+    private readonly minBPM = 70;    // Adjusted BPM range
+    private readonly maxBPM = 190;
+    private readonly onsetCooldown = 0.05; // 50ms cooldown between onsets
 
     // Onset detection state
     private prevSpectralFlux: number = 0;
-    private onsetThreshold: number = 0.3;
-    private adaptiveThreshold: number[] = new Array(10).fill(0.3);
+    private onsetThreshold: number = 0.2; // Lowered initial threshold
+    private adaptiveThreshold: number[] = new Array(20).fill(0.2);
 
     detectBPM(audioData: AudioData, currentTime: number): number {
         // Detect onset using spectral flux
         const onset = this.detectOnset(audioData);
 
-        if (onset.detected) {
+        if (onset.detected && (currentTime - this.lastBeatTime > this.onsetCooldown)) {
             const interval = currentTime - this.lastBeatTime;
 
             // Only consider intervals within reasonable BPM range
@@ -35,17 +36,20 @@ export class BPMDetector {
                 });
                 this.lastBeatTime = currentTime;
 
-                // Keep only recent history
+                // Keep only recent history, weighted by strength
+                this.beatHistory.sort((a, b) => b.strength - a.strength);
                 if (this.beatHistory.length > this.historySize) {
-                    this.beatHistory.shift();
+                    this.beatHistory.length = this.historySize;
                 }
+                this.beatHistory.sort((a, b) => a.time - b.time);
+
 
                 // Calculate BPM from intervals
-                if (this.beatHistory.length >= 4) {
+                if (this.beatHistory.length >= 5) { // Increased required beats
                     const calculatedBPM = this.calculateBPMFromHistory();
                     if (calculatedBPM > 0) {
                         this.bpmHistory.push(calculatedBPM);
-                        if (this.bpmHistory.length > 10) {
+                        if (this.bpmHistory.length > 15) { // Increased BPM history
                             this.bpmHistory.shift();
                         }
                     }
@@ -64,44 +68,49 @@ export class BPMDetector {
         // Update adaptive threshold
         this.adaptiveThreshold.shift();
         this.adaptiveThreshold.push(spectralFlux);
-        const avgThreshold = this.adaptiveThreshold.reduce((a, b) => a + b) / this.adaptiveThreshold.length;
+        const avgThreshold = this.adaptiveThreshold.reduce((a, b) => a + b, 0) / this.adaptiveThreshold.length;
 
         // Detect onset when flux exceeds adaptive threshold
-        const threshold = Math.max(this.onsetThreshold, avgThreshold * 1.5);
-        const detected = spectralFlux > threshold && spectralFlux > this.prevSpectralFlux * 1.3;
+        const threshold = Math.max(this.onsetThreshold, avgThreshold * 1.8); // Increased multiplier
+        const detected = spectralFlux > threshold && spectralFlux > this.prevSpectralFlux;
+
+        const strength = detected ? (spectralFlux - threshold) / (1 - threshold) : 0;
 
         this.prevSpectralFlux = spectralFlux;
 
         return {
             detected,
-            strength: detected ? spectralFlux / threshold : 0
+            strength
         };
     }
 
     private calculateBPMFromHistory(): number {
-        if (this.beatHistory.length < 4) return 0;
+        if (this.beatHistory.length < 5) return 0;
 
         // Calculate intervals between consecutive beats
-        const intervals: number[] = [];
+        const intervals: { value: number; weight: number }[] = [];
         for (let i = 1; i < this.beatHistory.length; i++) {
-            intervals.push(this.beatHistory[i].time - this.beatHistory[i - 1].time);
+            intervals.push({
+                value: this.beatHistory[i].time - this.beatHistory[i - 1].time,
+                weight: (this.beatHistory[i].strength + this.beatHistory[i - 1].strength) / 2
+            });
         }
 
-        // Find the most common interval using histogram
+        // Find the most common interval using a weighted histogram
         const histogram = new Map<number, number>();
-        const tolerance = 0.05; // 50ms tolerance
+        const tolerance = 0.04; // 40ms tolerance
 
         intervals.forEach(interval => {
             let found = false;
             for (const [key, count] of histogram) {
-                if (Math.abs(interval - key) < tolerance) {
-                    histogram.set(key, count + 1);
+                if (Math.abs(interval.value - key) < tolerance * (key / 0.5)) { // Tolerance scales with interval
+                    histogram.set(key, count + interval.weight);
                     found = true;
                     break;
                 }
             }
             if (!found) {
-                histogram.set(interval, 1);
+                histogram.set(interval.value, interval.weight);
             }
         });
 
@@ -120,14 +129,28 @@ export class BPMDetector {
     }
 
     private getStableBPM(): number {
-        if (this.bpmHistory.length === 0) return 0;
+        if (this.bpmHistory.length < 3) return 0; // Require at least 3 entries
 
         // Return median for stability
         const sorted = [...this.bpmHistory].sort((a, b) => a - b);
         const mid = Math.floor(sorted.length / 2);
-        return sorted.length % 2 === 0
-            ? (sorted[mid - 1] + sorted[mid]) / 2
-            : sorted[mid];
+
+        let median;
+        if (sorted.length % 2 === 0) {
+            median = (sorted[mid - 1] + sorted[mid]) / 2;
+        } else {
+            median = sorted[mid];
+        }
+
+        // Discard outliers
+        const lowerBound = median * 0.75;
+        const upperBound = median * 1.25;
+        const filtered = this.bpmHistory.filter(bpm => bpm >= lowerBound && bpm <= upperBound);
+
+        if (filtered.length < 3) return median; // Not enough data after filtering
+
+        // Return average of filtered history
+        return filtered.reduce((a, b) => a + b, 0) / filtered.length;
     }
 
     // Get phase position within current beat (0-1)
@@ -137,6 +160,15 @@ export class BPMDetector {
         const beatDuration = 60 / bpm;
         const timeSinceLastBeat = currentTime - this.lastBeatTime;
         return (timeSinceLastBeat % beatDuration) / beatDuration;
+    }
+
+    getConfidence(): number {
+        if (this.bpmHistory.length < 5) return 0;
+        // Confidence based on the standard deviation of the BPM history
+        const mean = this.bpmHistory.reduce((a, b) => a + b, 0) / this.bpmHistory.length;
+        const stdDev = Math.sqrt(this.bpmHistory.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / this.bpmHistory.length);
+        const confidence = Math.max(0, 1 - (stdDev / (mean * 0.1))); // 10% tolerance
+        return confidence;
     }
 
     // Predict next beat time
