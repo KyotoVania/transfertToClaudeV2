@@ -10,7 +10,7 @@ interface ChainSpellSettings {
     // Visual settings
     animationSpeed: number;
     colorIntensity: number;
-    fogEnabled: boolean; // NEW: Boolean to enable/disable fog
+    fogEnabled: boolean;
     fogDensity: number;
     cameraDistance: number;
     // Shader-specific settings
@@ -18,7 +18,31 @@ interface ChainSpellSettings {
     chainComplexity: number; // Controls the detail/intricacy of each individual chain segment
     chainSegments: number; // Controls how many chain segments are arranged in the circle
     stormIntensity: number;
+
+    // Audio Spectral Settings
+    audioReactivity: boolean;
+    frequencyScale: 'linear' | 'logarithmic' | 'mel' | 'musical';
+    melodicVisualization: boolean;
+    harmonicResonance: boolean;
+
+    // Audio Intensities
+    bassChainIntensity: number;
+    midChainIntensity: number;
+    trebleChainIntensity: number;
+    melodicHighlightIntensity: number;
 }
+
+// Note frequencies for musical scale mode (from HarmonicGridV2)
+const NOTE_FREQUENCIES = [
+    16.35, 17.32, 18.35, 19.45, 20.60, 21.83, 23.12, 24.50, 25.96, 27.50, 29.14, 30.87, // C0-B0
+    32.70, 34.65, 36.71, 38.89, 41.20, 43.65, 46.25, 49.00, 51.91, 55.00, 58.27, 61.74, // C1-B1
+    65.41, 69.30, 73.42, 77.78, 82.41, 87.31, 92.50, 98.00, 103.83, 110.00, 116.54, 123.47, // C2-B2
+    130.81, 138.59, 146.83, 155.56, 164.81, 174.61, 185.00, 196.00, 207.65, 220.00, 233.08, 246.94, // C3-B3
+    261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88, // C4-B4
+    523.25, 554.37, 587.33, 622.25, 659.25, 698.46, 739.99, 783.99, 830.61, 880.00, 932.33, 987.77, // C5-B5
+    1046.50, 1108.73, 1174.66, 1244.51, 1318.51, 1396.91, 1479.98, 1567.98, 1661.22, 1760.00, 1864.66, 1975.53, // C6-B6
+    2093.00, 2217.46, 2349.32, 2489.02, 2637.02, 2793.83, 2959.96, 3135.96, 3322.44, 3520.00, 3729.31, 3951.07, // C7-B7
+];
 
 // Vertex shader - simple pass-through for full-screen quad
 const vertexShader = `
@@ -30,7 +54,7 @@ void main() {
 }
 `;
 
-// Fragment shader - ported from Shadertoy
+// Fragment shader - ported from Shadertoy with audio integration
 const fragmentShader = `
 uniform vec3 iResolution;
 uniform float iTime;
@@ -43,6 +67,13 @@ uniform float spellCount;
 uniform float chainComplexity;
 uniform float chainSegments;
 uniform float stormIntensity;
+
+// Audio uniforms
+uniform bool audioReactivity;
+uniform float frequencyData[64];
+uniform float bassChainIntensity;
+uniform float midChainIntensity;
+uniform float trebleChainIntensity;
 
 varying vec2 vUv;
 
@@ -94,18 +125,50 @@ float rand(vec2 co) {
   return fract(sin(dot(co * 0.123, vec2(12.9898, 78.233))) * 43758.5453); 
 }
 
-// Polar domain repetition
+// Polar domain repetition - FIXED to ensure proper indexing
 vec3 moda(vec2 p, float count) {
   float an = TAU / count;
-  float a = atan(p.y, p.x) + an / 2.;
-  float c = floor(a / an);
-  a = mod(a, an) - an / 2.;
-  return vec3(vec2(cos(a), sin(a)) * length(p), c);
+  // Convert angle to 0-TAU range
+  float angle = atan(p.y, p.x);
+  if (angle < 0.0) angle += TAU;
+  
+  // Calculate segment index
+  float index = floor(angle / an);
+  
+  // Calculate local angle within segment
+  float localAngle = mod(angle, an) - an * 0.5;
+  
+  // Ensure index wraps correctly
+  index = mod(index, count);
+  
+  return vec3(vec2(cos(localAngle), sin(localAngle)) * length(p), index);
 }
 
 // The rhythm of animation
 float getLocalWave(float x) { 
   return sin(-iTime + x * 3.); 
+}
+
+// Get audio intensity for a chain segment
+float getChainAudioIntensity(float segmentIndex) {
+  if (!audioReactivity) return 1.0;
+  
+  int index = int(segmentIndex);
+  if (index < 0 || index >= 64) return 1.0;
+  
+  float intensity = frequencyData[index];
+  
+  // Apply band-specific intensities
+  float normalizedPos = segmentIndex / chainSegments;
+  if (normalizedPos < 0.3) {
+    intensity *= bassChainIntensity;
+  } else if (normalizedPos < 0.7) {
+    intensity *= midChainIntensity;
+  } else {
+    intensity *= trebleChainIntensity;
+  }
+  
+  return 0.3 + intensity * 0.7;
 }
 
 // Displacement in world space of the animation
@@ -170,11 +233,21 @@ float mapSpell(vec3 p) {
 // CORRECTED: chainSegments controls the number of segments, chainComplexity controls detail
 float mapChain(vec3 p) {
   float scene = 1.;
-  vec2 size = vec2(0.1, 0.02);
-
+  
   // First, use chainSegments to create the circular arrangement
   vec3 m = moda(p.xz, chainSegments);
+  float segmentIndex = m.z;
   p.xz = m.xy;
+  
+  // DEBUG: Force all segments to react to test
+  // segmentIndex = mod(segmentIndex + iTime * 10.0, chainSegments);
+  
+  // Get audio intensity for this chain segment
+  float audioIntensity = getChainAudioIntensity(segmentIndex);
+  
+  // Modify chain size based on audio - with more visible effect
+  vec2 baseSize = vec2(0.1, 0.02);
+  vec2 size = baseSize * audioIntensity; // Direct multiplication for clearer effect
 
   // Then apply the detailed chain shape using chainComplexity
   float torus1 = sdTorus(posChain(p).yxz, size);
@@ -231,9 +304,15 @@ void main() {
   
   float shade = 0.;
   float totalDistance = 0.;
+  float hitSegmentIndex = -1.0; // Store which segment was hit
   
   for (float i = 0.; i < STEPS; ++i) {
     float distSpell = min(mapSpell(pos), mapCore(pos));
+    
+    // Track segment index when evaluating chains
+    vec3 m = moda(pos.xz, chainSegments);
+    float currentSegmentIndex = m.z;
+    
     float distChain = mapChain(pos);
     float dist = min(distSpell, distChain);
     
@@ -241,6 +320,7 @@ void main() {
       shade += 1.;
       
       if (distChain < distSpell) {
+        hitSegmentIndex = currentSegmentIndex; // Remember which segment was hit
         shade = STEPS - i - 1.;
         break;
       }
@@ -255,6 +335,13 @@ void main() {
   float normalizedShade = shade / (STEPS - 1.);
   vec3 baseColor = vec3(normalizedShade * colorIntensity);
   
+  // DEBUG: Color based on segment index
+  bool debugMode = false; // Set to true to see segment mapping
+  if (debugMode && hitSegmentIndex >= 0.0) {
+    float hue = hitSegmentIndex / chainSegments;
+    baseColor = vec3(hue, 1.0, 1.0); // HSV to RGB would be better but this is simple
+  }
+  
   // Apply fog only if enabled
   vec3 finalColor = baseColor;
   if (fogEnabled) {
@@ -268,7 +355,7 @@ void main() {
 `;
 
 // 2. Create the scene component
-const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSettings; globalConfig: GlobalSettings }> = ({ config }) => {
+const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSettings; globalConfig: GlobalSettings }> = ({ audioData, config }) => {
     const meshRef = useRef<THREE.Mesh>(null);
     const { size, viewport, gl } = useThree();
 
@@ -281,7 +368,89 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
     // Zoom state
     const [zoom, setZoom] = useState(1.0);
 
-    // Create shader material with uniforms - AJOUT DE numChains
+    // Audio data refs
+    const frequencyDataRef = useRef<Float32Array>(new Float32Array(64));
+    const melodicHighlightRef = useRef<number[]>(new Array(64).fill(0));
+    const frameCount = useRef<number>(0);
+
+    // Create frequency mapping based on scale type (from HarmonicGridV2)
+    const createFrequencyMapping = (numSegments: number, numFreqBins: number, scale: string, sampleRate: number) => {
+        const mapping: number[] = [];
+
+        switch (scale) {
+            case 'musical': {
+                for (let i = 0; i < numSegments; i++) {
+                    const noteIndex = Math.floor((i / numSegments) * NOTE_FREQUENCIES.length);
+                    const noteFreq = NOTE_FREQUENCIES[noteIndex];
+                    const binIndex = Math.floor((noteFreq / (sampleRate / 2)) * numFreqBins);
+                    mapping.push(Math.min(binIndex, numFreqBins - 1));
+                }
+                break;
+            }
+            case 'mel': {
+                const melScale = (freq: number) => 2595 * Math.log10(1 + freq / 700);
+                const invMelScale = (mel: number) => 700 * (Math.pow(10, mel / 2595) - 1);
+
+                const minMel = melScale(20);
+                const maxMel = melScale(20000);
+
+                for (let i = 0; i < numSegments; i++) {
+                    const melValue = minMel + (i / numSegments) * (maxMel - minMel);
+                    const freq = invMelScale(melValue);
+                    const binIndex = Math.floor((freq / (sampleRate / 2)) * numFreqBins);
+                    mapping.push(Math.min(binIndex, numFreqBins - 1));
+                }
+                break;
+            }
+            case 'logarithmic': {
+                const minLog = Math.log(20);
+                const maxLog = Math.log(20000);
+
+                for (let i = 0; i < numSegments; i++) {
+                    const logValue = minLog + (i / numSegments) * (maxLog - minLog);
+                    const freq = Math.exp(logValue);
+                    const binIndex = Math.floor((freq / (sampleRate / 2)) * numFreqBins);
+                    mapping.push(Math.min(binIndex, numFreqBins - 1));
+                }
+                break;
+            }
+            default: // linear
+                for (let i = 0; i < numSegments; i++) {
+                    const binIndex = Math.floor((i / numSegments) * numFreqBins);
+                    mapping.push(binIndex);
+                }
+        }
+
+        return mapping;
+    };
+
+    // Find chain segment for a specific frequency (from HarmonicGridV2)
+    const findFrequencySegment = (frequency: number, frequencyMapping: number[]): number => {
+        if (frequency <= 0) return -1;
+
+        const sampleRate = 44100;
+        const binIndex = Math.floor((frequency / (sampleRate / 2)) * audioData.frequencies.length);
+
+        let closestSegment = 0;
+        let minDistance = Math.abs(frequencyMapping[0] - binIndex);
+
+        for (let i = 1; i < frequencyMapping.length; i++) {
+            const distance = Math.abs(frequencyMapping[i] - binIndex);
+            if (distance < minDistance) {
+                minDistance = distance;
+                closestSegment = i;
+            }
+        }
+
+        return closestSegment;
+    };
+
+    const frequencyMapping = useMemo(() =>
+            createFrequencyMapping(config.chainSegments, audioData.frequencies.length, config.frequencyScale, 44100),
+        [config.chainSegments, audioData.frequencies.length, config.frequencyScale]
+    );
+
+    // Create shader material with uniforms
     const uniforms = useMemo(() => ({
         iTime: { value: 0 },
         iResolution: { value: new THREE.Vector3() },
@@ -294,6 +463,13 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         chainComplexity: { value: config.chainComplexity },
         chainSegments: { value: config.chainSegments },
         stormIntensity: { value: config.stormIntensity },
+
+        // Audio uniforms
+        audioReactivity: { value: config.audioReactivity },
+        frequencyData: { value: frequencyDataRef.current },
+        bassChainIntensity: { value: config.bassChainIntensity },
+        midChainIntensity: { value: config.midChainIntensity },
+        trebleChainIntensity: { value: config.trebleChainIntensity },
     }), []); // Empty dependency array to avoid recreating uniforms
 
     // Handle mouse events
@@ -346,10 +522,12 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         };
     }, [isDragging, dragStart, currentRotation, rotation, gl.domElement]);
 
-    // Update uniforms each frame - AJOUT DE numChains
+    // Update uniforms each frame
     useFrame((state) => {
         if (!meshRef.current) return;
         const material = meshRef.current.material as THREE.ShaderMaterial;
+
+        frameCount.current++;
 
         // Update time
         material.uniforms.iTime.value = state.clock.elapsedTime * config.animationSpeed;
@@ -358,7 +536,6 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         material.uniforms.iResolution.value.set(size.width, size.height, 1);
 
         // Update mouse position based on rotation state
-        // Convert rotation to normalized coordinates for the shader
         const normalizedX = (rotation.x / size.width) % 1;
         const normalizedY = (rotation.y / size.height) % 1;
 
@@ -374,12 +551,73 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
 
         // Update all other uniforms from config
         material.uniforms.colorIntensity.value = config.colorIntensity;
-        material.uniforms.fogEnabled.value = config.fogEnabled; // NEW: Update fog enabled state
+        material.uniforms.fogEnabled.value = config.fogEnabled;
         material.uniforms.fogDensity.value = config.fogDensity;
         material.uniforms.spellCount.value = config.spellCount;
         material.uniforms.chainComplexity.value = config.chainComplexity;
         material.uniforms.chainSegments.value = config.chainSegments;
         material.uniforms.stormIntensity.value = config.stormIntensity;
+
+        // Update audio uniforms
+        material.uniforms.audioReactivity.value = config.audioReactivity;
+        material.uniforms.bassChainIntensity.value = config.bassChainIntensity;
+        material.uniforms.midChainIntensity.value = config.midChainIntensity;
+        material.uniforms.trebleChainIntensity.value = config.trebleChainIntensity;
+
+        // Process audio data if audio reactivity is enabled
+        if (config.audioReactivity) {
+            // Map frequencies to chain segments
+            for (let i = 0; i < config.chainSegments; i++) {
+                const freqIndex = frequencyMapping[i];
+                let intensity = (audioData.frequencies[freqIndex] || 0) / 255;
+
+                // Apply smoothing
+                const smoothing = 0.85;
+                frequencyDataRef.current[i] = frequencyDataRef.current[i] * smoothing + intensity * (1 - smoothing);
+            }
+
+            // Melodic visualization
+            if (config.melodicVisualization && audioData.melodicFeatures.noteConfidence > 0.3) {
+                const fundamentalSegment = findFrequencySegment(audioData.melodicFeatures.dominantFrequency, frequencyMapping);
+
+                if (fundamentalSegment >= 0 && fundamentalSegment < config.chainSegments) {
+                    // Highlight fundamental frequency
+                    melodicHighlightRef.current[fundamentalSegment] = audioData.melodicFeatures.noteConfidence * config.melodicHighlightIntensity;
+
+                    // Harmonic resonance
+                    if (config.harmonicResonance) {
+                        // Highlight harmonics
+                        for (let harmonic = 2; harmonic <= 6; harmonic++) {
+                            const harmonicSegment = findFrequencySegment(audioData.melodicFeatures.dominantFrequency * harmonic, frequencyMapping);
+                            if (harmonicSegment >= 0 && harmonicSegment < config.chainSegments) {
+                                const intensity = audioData.melodicFeatures.noteConfidence * config.melodicHighlightIntensity * (1.2 / Math.sqrt(harmonic));
+                                melodicHighlightRef.current[harmonicSegment] = Math.max(melodicHighlightRef.current[harmonicSegment], intensity);
+                            }
+                        }
+
+                        // Highlight subharmonics
+                        for (let subharmonic = 2; subharmonic <= 3; subharmonic++) {
+                            const subharmonicSegment = findFrequencySegment(audioData.melodicFeatures.dominantFrequency / subharmonic, frequencyMapping);
+                            if (subharmonicSegment >= 0 && subharmonicSegment < config.chainSegments) {
+                                const intensity = audioData.melodicFeatures.noteConfidence * config.melodicHighlightIntensity * (0.8 / subharmonic);
+                                melodicHighlightRef.current[subharmonicSegment] = Math.max(melodicHighlightRef.current[subharmonicSegment], intensity);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Decay melodic highlights
+            for (let i = 0; i < config.chainSegments; i++) {
+                melodicHighlightRef.current[i] *= 0.95;
+
+                // Combine frequency data with melodic highlight
+                frequencyDataRef.current[i] = Math.max(frequencyDataRef.current[i], melodicHighlightRef.current[i]);
+            }
+
+            // Update shader uniform
+            material.uniforms.frequencyData.value = frequencyDataRef.current;
+        }
     });
 
     // Change cursor on drag
@@ -410,15 +648,41 @@ const schema: SceneSettingsSchema = {
     animationSpeed: { type: 'slider', label: 'Animation Speed', min: 0.1, max: 3, step: 0.1 },
     colorIntensity: { type: 'slider', label: 'Color Intensity', min: 0.5, max: 2, step: 0.1 },
     fogEnabled: { type: 'select', label: 'Fog Enabled', options: [
-        { value: 'true', label: 'On' },
-        { value: 'false', label: 'Off' },
-    ]},
+            { value: 'true', label: 'On' },
+            { value: 'false', label: 'Off' },
+        ]},
     fogDensity: { type: 'slider', label: 'Fog Density', min: 0, max: 2, step: 0.1 },
     cameraDistance: { type: 'slider', label: 'Camera Distance', min: 0.5, max: 3, step: 0.1 },
     spellCount: { type: 'slider', label: 'Spell Count', min: 1, max: 10, step: 1 },
     chainComplexity: { type: 'slider', label: 'Chain Detail', min: 10, max: 40, step: 1 },
     chainSegments: { type: 'slider', label: 'Chain Segments', min: 6, max: 64, step: 1 },
     stormIntensity: { type: 'slider', label: 'Storm Intensity', min: 0, max: 2, step: 0.1 },
+
+    // Audio Spectral Settings
+    audioReactivity: { type: 'select', label: 'Audio Reactivity', options: [
+            { value: 'true', label: 'On' },
+            { value: 'false', label: 'Off' },
+        ]},
+    frequencyScale: { type: 'select', label: 'Frequency Scale', options: [
+            { value: 'linear', label: 'Linear' },
+            { value: 'logarithmic', label: 'Logarithmic' },
+            { value: 'mel', label: 'Mel Scale' },
+            { value: 'musical', label: 'Musical Notes' },
+        ]},
+    melodicVisualization: { type: 'select', label: 'Melodic Lines', options: [
+            { value: 'true', label: 'On' },
+            { value: 'false', label: 'Off' },
+        ]},
+    harmonicResonance: { type: 'select', label: 'Harmonic Resonance', options: [
+            { value: 'true', label: 'On' },
+            { value: 'false', label: 'Off' },
+        ]},
+
+    // Audio Intensities
+    bassChainIntensity: { type: 'slider', label: 'Bass Intensity', min: 0.5, max: 3, step: 0.1 },
+    midChainIntensity: { type: 'slider', label: 'Mid Intensity', min: 0.5, max: 3, step: 0.1 },
+    trebleChainIntensity: { type: 'slider', label: 'Treble Intensity', min: 0.5, max: 3, step: 0.1 },
+    melodicHighlightIntensity: { type: 'slider', label: 'Melodic Highlight', min: 0.5, max: 3, step: 0.1 },
 };
 
 export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
@@ -436,6 +700,16 @@ export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
             chainComplexity: 21, // Perfect detail level for each segment
             chainSegments: 32,
             stormIntensity: 0.7,
+
+            // Audio defaults
+            audioReactivity: true,
+            frequencyScale: 'logarithmic',
+            melodicVisualization: true,
+            harmonicResonance: true,
+            bassChainIntensity: 1.5,
+            midChainIntensity: 1.2,
+            trebleChainIntensity: 1.8,
+            melodicHighlightIntensity: 2.5,
         },
         schema,
     },

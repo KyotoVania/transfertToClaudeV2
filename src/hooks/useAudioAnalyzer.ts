@@ -617,7 +617,7 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       return;
     }
 
-    analyserRef.current.fftSize = 2048; // Consider 4096 for melody detection
+    analyserRef.current.fftSize = 4096; // Consider 4096 for melody detection
     analyserRef.current.smoothingTimeConstant = 0.75;
     analyserRef.current.minDecibels = -90;
     analyserRef.current.maxDecibels = -10;
