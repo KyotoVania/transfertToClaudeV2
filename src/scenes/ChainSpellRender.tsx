@@ -566,14 +566,105 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
 
         // Process audio data if audio reactivity is enabled
         if (config.audioReactivity) {
-            // Map frequencies to chain segments
+            // STEP 1: Calculate raw intensities for each segment
+            const rawIntensities = new Float32Array(config.chainSegments);
+
             for (let i = 0; i < config.chainSegments; i++) {
                 const freqIndex = frequencyMapping[i];
-                let intensity = (audioData.frequencies[freqIndex] || 0) / 255;
 
-                // Apply smoothing
-                const smoothing = 0.85;
-                frequencyDataRef.current[i] = frequencyDataRef.current[i] * smoothing + intensity * (1 - smoothing);
+                // IMPROVED: Use processed data with adaptive compression instead of raw frequencies
+                let intensity = 0;
+
+                // Calculate frequency position for band assignment
+                const freqPosition = i / config.chainSegments;
+                const nyquist = 22050; // Half of typical sample rate
+                const binSize = nyquist / audioData.frequencies.length;
+                const actualFreq = freqIndex * binSize;
+
+                // Use dynamic bands with adaptive compression for better drop/chill distinction
+                if (actualFreq <= 250) {
+                    // Bass range: Use dynamicBands.bass (already compressed and normalized)
+                    intensity = audioData.dynamicBands.bass;
+                } else if (actualFreq <= 4000) {
+                    // Mid range: Use dynamicBands.mid
+                    intensity = audioData.dynamicBands.mid;
+                } else {
+                    // Treble range: Use dynamicBands.treble
+                    intensity = audioData.dynamicBands.treble;
+                }
+
+                // Add fine frequency detail using raw frequencies but with better scaling
+                const rawIntensity = (audioData.frequencies[freqIndex] || 0) / 255;
+
+                // IMPROVED: More aggressive blending for better reactivity
+                const blendFactor = 0.5; // More balanced between processed and raw data
+                intensity = intensity * blendFactor + rawIntensity * (1 - blendFactor);
+
+                // IMPROVED: Much stronger energy-based boost for dramatic drops
+                const energyBoost = 1 + (audioData.energy * 0.8); // Increased from 0.3 to 0.8
+                intensity *= energyBoost;
+
+                // IMPROVED: Add transient-based spikes for immediate impact
+                let transientBoost = 1.0;
+                if (freqPosition < 0.3 && audioData.transients.bass) {
+                    transientBoost = 2.5; // Strong bass transient boost
+                } else if (freqPosition >= 0.3 && freqPosition < 0.7 && audioData.transients.mid) {
+                    transientBoost = 2.2; // Mid transient boost
+                } else if (freqPosition >= 0.7 && audioData.transients.treble) {
+                    transientBoost = 2.8; // Strongest treble transient boost
+                } else if (audioData.transients.overall) {
+                    transientBoost = 1.8; // General transient boost
+                }
+                intensity *= transientBoost;
+
+                // IMPROVED: Add drop intensity for massive visual impact
+                if (audioData.dropIntensity > 0.1) {
+                    intensity *= (1 + audioData.dropIntensity * 1.5); // Huge drop boost
+                }
+
+                // IMPROVED: Higher ceiling for dramatic effects
+                intensity = Math.min(intensity, 3.0); // Increased from 1.5 to 3.0
+
+                // Store raw intensity before smoothing
+                rawIntensities[i] = intensity;
+            }
+
+            // STEP 2: Apply spatial smoothing to prevent harsh cuts in the circle
+            const smoothedIntensities = new Float32Array(config.chainSegments);
+            const spatialSmoothingRadius = 2; // Number of neighbors to consider on each side
+            const spatialSmoothingStrength = 0.3; // How much to blend with neighbors (0-1)
+
+            for (let i = 0; i < config.chainSegments; i++) {
+                let smoothedIntensity = rawIntensities[i] * (1 - spatialSmoothingStrength);
+                let neighborSum = 0;
+                let neighborCount = 0;
+
+                // Sample neighbors in both directions (circular array)
+                for (let offset = -spatialSmoothingRadius; offset <= spatialSmoothingRadius; offset++) {
+                    if (offset === 0) continue; // Skip self
+
+                    const neighborIndex = (i + offset + config.chainSegments) % config.chainSegments;
+                    const distance = Math.abs(offset);
+                    const weight = 1.0 / (distance * distance); // Quadratic falloff
+
+                    neighborSum += rawIntensities[neighborIndex] * weight;
+                    neighborCount += weight;
+                }
+
+                // Blend original intensity with weighted neighbor average
+                if (neighborCount > 0) {
+                    const neighborAverage = neighborSum / neighborCount;
+                    smoothedIntensity += neighborAverage * spatialSmoothingStrength;
+                }
+
+                smoothedIntensities[i] = smoothedIntensity;
+            }
+
+            // STEP 3: Apply temporal smoothing and finalize
+            for (let i = 0; i < config.chainSegments; i++) {
+                // IMPROVED: Less aggressive temporal smoothing for more reactive chains
+                const temporalSmoothing = audioData.transients.overall ? 0.6 : 0.75; // Dynamic smoothing
+                frequencyDataRef.current[i] = frequencyDataRef.current[i] * temporalSmoothing + smoothedIntensities[i] * (1 - temporalSmoothing);
             }
 
             // Melodic visualization
@@ -714,3 +805,4 @@ export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
         schema,
     },
 };
+
