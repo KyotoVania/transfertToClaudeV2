@@ -10,11 +10,13 @@ interface ChainSpellSettings {
     // Visual settings
     animationSpeed: number;
     colorIntensity: number;
+    fogEnabled: boolean; // NEW: Boolean to enable/disable fog
     fogDensity: number;
     cameraDistance: number;
     // Shader-specific settings
     spellCount: number;
-    chainComplexity: number;
+    chainComplexity: number; // Controls the detail/intricacy of each individual chain segment
+    chainSegments: number; // Controls how many chain segments are arranged in the circle
     stormIntensity: number;
 }
 
@@ -35,9 +37,11 @@ uniform float iTime;
 uniform vec4 iMouse;
 uniform float cameraDistance;
 uniform float colorIntensity;
+uniform bool fogEnabled;
 uniform float fogDensity;
 uniform float spellCount;
 uniform float chainComplexity;
+uniform float chainSegments;
 uniform float stormIntensity;
 
 varying vec2 vUv;
@@ -124,30 +128,25 @@ vec3 camera(vec3 p) {
   return p;
 }
 
-// Position of chain
-vec3 posChain(vec3 p, float count) {
+// Position of chain - chainComplexity controls the detail of each segment
+vec3 posChain(vec3 p) {
   float za = atan(p.z, p.x);
   vec3 dir = normalize(p);
-  
-  // Domain repetition
-  vec3 m = moda(p.xz, count);
+
+  // Use chainComplexity for internal detail of each chain segment
+  vec3 m = moda(p.xz, chainComplexity);
   p.xz = m.xy;
-  float lw = getLocalWave(m.z / PI);
-  p.x -= 1. - 0.1 * lw;
   
-  // The chain shape
+  // Static chains (no breaking animation)
+  float lw = 0.0;
+  
+  // FIXED: Increased radius from 1.0 to 1.5 to give more space between chains
+  // This prevents visual compression when we have many chain segments
+  p.x -= 1.5 - 0.1 * lw;
+
+  // The chain shape detail
   p.z *= 1. - clamp(0.03 / abs(p.z), 0., 1.);
-  
-  // Animation of breaking chain
-  float r1 = lw * smoothstep(0.1, 0.5, lw);
-  float r2 = lw * smoothstep(0.4, 0.6, lw);
-  p += dir * mix(0., 0.3 * sin(floor(za * 3.)), r1);
-  p += dir * mix(0., 0.8 * sin(floor(za * 60.)), r2);
-  
-  // Rotate chain for animation smoothness
-  float a = lw * 0.3;
-  p.xy *= rot(a);
-  p.xz *= rot(a);
+
   return p;
 }
 
@@ -157,48 +156,44 @@ float mapSpell(vec3 p) {
   float a = atan(p.z, p.x);
   float l = length(p);
   float lw = getLocalWave(a);
-  
-  // Warping space into cylinder
+
   p.z = l - 1. + 0.1 * lw;
-  
-  // Torsade effect
+
   p.yz *= rot(iTime + a * 2.);
-  
-  // Long cube shape
+
   scene = min(scene, sdBox(p, vec3(10., vec2(0.25 - 0.1 * lw))));
-  
-  // Long cylinder cutting the box (intersection difference)
+
   scene = max(scene, -sdCylinder(p.zy, 0.3 - 0.2 * lw));
   return scene;
 }
 
-// Distance function for the chain
+// CORRECTED: chainSegments controls the number of segments, chainComplexity controls detail
 float mapChain(vec3 p) {
   float scene = 1.;
-  
-  // Number of chain - NOW CONTROLLED BY UNIFORM
-  float count = chainComplexity;
-  
-  // Size of chain
   vec2 size = vec2(0.1, 0.02);
+
+  // First, use chainSegments to create the circular arrangement
+  vec3 m = moda(p.xz, chainSegments);
+  p.xz = m.xy;
+
+  // Then apply the detailed chain shape using chainComplexity
+  float torus1 = sdTorus(posChain(p).yxz, size);
+  scene = min(scene, torus1);
   
-  // First set of chains
-  float torus = sdTorus(posChain(p, count).yxz, size);
-  scene = smin(scene, torus, 0.1);
+  // Second set of chain links (rotated to create interlocking effect)
+  // Use chainComplexity for interlocking detail
+  p.xz *= rot(PI / chainComplexity);
+  float torus2 = sdTorus(posChain(p).xyz, size);
+  scene = min(scene, torus2);
   
-  // Second set of chains
-  p.xz *= rot(PI / count);
-  scene = min(scene, sdTorus(posChain(p, count).xyz, size));
   return scene;
 }
 
 // Position of core stuff
 vec3 posCore(vec3 p, float count) {
-  // Polar domain repetition
   vec3 m = moda(p.xz, count);
   p.xz = m.xy;
   
-  // Linear domain repetition
   float c = 0.2;
   p.x = mod(p.x, c) - c / 2.;
   return p;
@@ -208,11 +203,9 @@ vec3 posCore(vec3 p, float count) {
 float mapCore(vec3 p) {
   float scene = 1.;
   
-  // Number of torus repeated - NOW CONTROLLED BY UNIFORM
-  float count = spellCount * 2.0; // Multiply by 2 for more visual complexity
+  float count = spellCount * 2.0;
   float a = p.x * 2.;
   
-  // Displace space - Storm intensity affects rotation speed
   float stormFactor = 1.0 + stormIntensity * 2.0;
   p.xz *= rot(p.y * 6.);
   p.xz *= rot(iTime * stormFactor);
@@ -221,77 +214,63 @@ float mapCore(vec3 p) {
   vec3 p1 = posCore(p, count);
   vec2 size = vec2(0.1, 0.2);
   
-  // Tentacles torus shape
   scene = min(scene, sdTorus(p1.xzy * 1.5, size));
   
-  // Sphere used for intersection difference with the toruses
   scene = max(-scene, sdSphere(p, 0.6));
   return scene;
 }
 
 void main() {
-  // Raymarch camera
   vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;
   vec3 eye = camera(vec3(uv, -1.5));
   vec3 ray = camera(normalize(vec3(uv, 1.)));
   vec3 pos = eye;
   
-  // Dithering
   vec2 dpos = gl_FragCoord.xy / iResolution.xy;
   vec2 seed = dpos + fract(iTime);
   
   float shade = 0.;
-  float totalDistance = 0.; // Track total distance for fog
+  float totalDistance = 0.;
   
   for (float i = 0.; i < STEPS; ++i) {
-    // Distance from the different shapes
     float distSpell = min(mapSpell(pos), mapCore(pos));
     float distChain = mapChain(pos);
     float dist = min(distSpell, distChain);
     
-    // Hit volume
     if (dist < BIAS) {
-      // Add shade
       shade += 1.;
       
-      // Hit non transparent volume
       if (distChain < distSpell) {
-        // Set shade and stop iteration
         shade = STEPS - i - 1.;
         break;
       }
     }
     
-    // Dithering
     dist = abs(dist) * (0.8 + 0.2 * rand(seed * vec2(i)));
-    
-    // Minimum step
     dist = max(DIST_MIN, dist);
-    
-    // Raymarch
     pos += ray * dist;
     totalDistance += dist;
   }
   
-  // Color from the normalized steps
   float normalizedShade = shade / (STEPS - 1.);
-  
-  // Apply color intensity
   vec3 baseColor = vec3(normalizedShade * colorIntensity);
   
-  // Apply fog based on distance
-  float fogAmount = 1.0 - exp(-totalDistance * fogDensity * 0.05);
-  vec3 fogColor = vec3(0.0); // Black fog
-  vec3 finalColor = mix(baseColor, fogColor, fogAmount);
+  // Apply fog only if enabled
+  vec3 finalColor = baseColor;
+  if (fogEnabled) {
+    float fogAmount = 1.0 - exp(-totalDistance * fogDensity * 0.05);
+    vec3 fogColor = vec3(0.0);
+    finalColor = mix(baseColor, fogColor, fogAmount);
+  }
   
   gl_FragColor = vec4(finalColor, 1.0);
 }
 `;
 
 // 2. Create the scene component
-const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSettings; globalConfig: GlobalSettings }> = ({ audioData, config, globalConfig }) => {
+const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSettings; globalConfig: GlobalSettings }> = ({ config }) => {
     const meshRef = useRef<THREE.Mesh>(null);
-    const { size, viewport, mouse, gl } = useThree();
+    const { size, viewport, gl } = useThree();
 
     // Mouse drag state
     const [isDragging, setIsDragging] = useState(false);
@@ -302,16 +281,18 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
     // Zoom state
     const [zoom, setZoom] = useState(1.0);
 
-    // Create shader material with uniforms
+    // Create shader material with uniforms - AJOUT DE numChains
     const uniforms = useMemo(() => ({
         iTime: { value: 0 },
         iResolution: { value: new THREE.Vector3() },
         iMouse: { value: new THREE.Vector4() },
         cameraDistance: { value: config.cameraDistance },
         colorIntensity: { value: config.colorIntensity },
+        fogEnabled: { value: config.fogEnabled },
         fogDensity: { value: config.fogDensity },
         spellCount: { value: config.spellCount },
         chainComplexity: { value: config.chainComplexity },
+        chainSegments: { value: config.chainSegments },
         stormIntensity: { value: config.stormIntensity },
     }), []); // Empty dependency array to avoid recreating uniforms
 
@@ -365,7 +346,7 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         };
     }, [isDragging, dragStart, currentRotation, rotation, gl.domElement]);
 
-    // Update uniforms each frame
+    // Update uniforms each frame - AJOUT DE numChains
     useFrame((state) => {
         if (!meshRef.current) return;
         const material = meshRef.current.material as THREE.ShaderMaterial;
@@ -393,9 +374,11 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
 
         // Update all other uniforms from config
         material.uniforms.colorIntensity.value = config.colorIntensity;
+        material.uniforms.fogEnabled.value = config.fogEnabled; // NEW: Update fog enabled state
         material.uniforms.fogDensity.value = config.fogDensity;
         material.uniforms.spellCount.value = config.spellCount;
         material.uniforms.chainComplexity.value = config.chainComplexity;
+        material.uniforms.chainSegments.value = config.chainSegments;
         material.uniforms.stormIntensity.value = config.stormIntensity;
     });
 
@@ -426,10 +409,15 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
 const schema: SceneSettingsSchema = {
     animationSpeed: { type: 'slider', label: 'Animation Speed', min: 0.1, max: 3, step: 0.1 },
     colorIntensity: { type: 'slider', label: 'Color Intensity', min: 0.5, max: 2, step: 0.1 },
+    fogEnabled: { type: 'select', label: 'Fog Enabled', options: [
+        { value: 'true', label: 'On' },
+        { value: 'false', label: 'Off' },
+    ]},
     fogDensity: { type: 'slider', label: 'Fog Density', min: 0, max: 2, step: 0.1 },
     cameraDistance: { type: 'slider', label: 'Camera Distance', min: 0.5, max: 3, step: 0.1 },
     spellCount: { type: 'slider', label: 'Spell Count', min: 1, max: 10, step: 1 },
-    chainComplexity: { type: 'slider', label: 'Chain Complexity', min: 10, max: 30, step: 1 },
+    chainComplexity: { type: 'slider', label: 'Chain Detail', min: 10, max: 40, step: 1 },
+    chainSegments: { type: 'slider', label: 'Chain Segments', min: 6, max: 64, step: 1 },
     stormIntensity: { type: 'slider', label: 'Storm Intensity', min: 0, max: 2, step: 0.1 },
 };
 
@@ -441,10 +429,12 @@ export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
         default: {
             animationSpeed: 1.0,
             colorIntensity: 1.0,
+            fogEnabled: true,
             fogDensity: 0.5,
             cameraDistance: 1.5,
             spellCount: 5,
-            chainComplexity: 21,
+            chainComplexity: 21, // Perfect detail level for each segment
+            chainSegments: 32,
             stormIntensity: 0.7,
         },
         schema,
