@@ -28,7 +28,7 @@ void main() {
 }
 `;
 
-// Fragment shader - ported from Shadertoy with frequency band control
+// Fragment shader - ported from Shadertoy
 const fragmentShader = `
 uniform vec3 iResolution;
 uniform float iTime;
@@ -39,8 +39,6 @@ uniform float fogDensity;
 uniform float spellCount;
 uniform float chainComplexity;
 uniform float stormIntensity;
-// NEW: Array of 32 frequency bands for individual chain control
-uniform float u_frequency_bands[32];
 
 varying vec2 vUv;
 
@@ -101,23 +99,14 @@ vec3 moda(vec2 p, float count) {
   return vec3(vec2(cos(a), sin(a)) * length(p), c);
 }
 
-// The rhythm of animation - NOW CONTROLLED BY FREQUENCY BANDS
-float getLocalWave(float x, int chainId) {
-  // Ensure chainId is within bounds
-  int safeChainId = clamp(chainId, 0, 31);
-  
-  // Get frequency energy for this specific chain
-  float frequency_energy = u_frequency_bands[safeChainId];
-  
-  // Apply frequency energy to the wave with enhanced intensity
-  float effect_intensity = frequency_energy * 15.0; // Multiplicateur pour rendre l'effet visible
-  
-  return sin(-iTime + x * 3.) * (1.0 + effect_intensity); 
+// The rhythm of animation
+float getLocalWave(float x) { 
+  return sin(-iTime + x * 3.); 
 }
 
-// Displacement in world space of the animation - NOW PER CHAIN
-float getWorldWave(float x, int chainId) { 
-  return 1. - 0.1 * getLocalWave(x, chainId); 
+// Displacement in world space of the animation
+float getWorldWave(float x) { 
+  return 1. - 0.1 * getLocalWave(x); 
 }
 
 // Camera control - using mouse position for now
@@ -135,94 +124,71 @@ vec3 camera(vec3 p) {
   return p;
 }
 
-// Position of chain - ENHANCED WITH FREQUENCY CONTROL
-vec3 posChain(vec3 p, float count, int chainId) {
+// Position of chain
+vec3 posChain(vec3 p, float count) {
   float za = atan(p.z, p.x);
   vec3 dir = normalize(p);
   
   // Domain repetition
   vec3 m = moda(p.xz, count);
   p.xz = m.xy;
-  
-  // Get chain-specific wave with frequency energy
-  float lw = getLocalWave(m.z / PI, chainId);
-  
-  // Get frequency energy for additional effects
-  int safeChainId = clamp(chainId, 0, 31);
-  float frequency_energy = u_frequency_bands[safeChainId];
-  float chain_intensity = frequency_energy * 20.0; // Intensity multiplier
-  
+  float lw = getLocalWave(m.z / PI);
   p.x -= 1. - 0.1 * lw;
   
-  // The chain shape with frequency-based deformation
-  p.z *= 1. - clamp(0.03 / abs(p.z), 0., 1.) * (1.0 + chain_intensity * 0.5);
+  // The chain shape
+  p.z *= 1. - clamp(0.03 / abs(p.z), 0., 1.);
   
-  // Animation of breaking chain - ENHANCED WITH FREQUENCY
-  float r1 = lw * smoothstep(0.1, 0.5, lw) * (1.0 + chain_intensity);
-  float r2 = lw * smoothstep(0.4, 0.6, lw) * (1.0 + chain_intensity * 0.8);
+  // Animation of breaking chain
+  float r1 = lw * smoothstep(0.1, 0.5, lw);
+  float r2 = lw * smoothstep(0.4, 0.6, lw);
   p += dir * mix(0., 0.3 * sin(floor(za * 3.)), r1);
   p += dir * mix(0., 0.8 * sin(floor(za * 60.)), r2);
   
-  // Rotate chain for animation smoothness with frequency influence
-  float a = lw * 0.3 * (1.0 + frequency_energy * 2.0);
+  // Rotate chain for animation smoothness
+  float a = lw * 0.3;
   p.xy *= rot(a);
   p.xz *= rot(a);
   return p;
 }
 
-// Distance function for spell - ENHANCED WITH FREQUENCY
-float mapSpell(vec3 p, int chainId) {
+// Distance function for spell
+float mapSpell(vec3 p) {
   float scene = 1.;
   float a = atan(p.z, p.x);
   float l = length(p);
-  float lw = getLocalWave(a, chainId);
+  float lw = getLocalWave(a);
   
-  // Get frequency energy for this chain
-  int safeChainId = clamp(chainId, 0, 31);
-  float frequency_energy = u_frequency_bands[safeChainId];
-  float spell_intensity = frequency_energy * 10.0;
+  // Warping space into cylinder
+  p.z = l - 1. + 0.1 * lw;
   
-  // Warping space into cylinder with frequency influence
-  p.z = l - 1. + 0.1 * lw * (1.0 + spell_intensity);
+  // Torsade effect
+  p.yz *= rot(iTime + a * 2.);
   
-  // Torsade effect enhanced by frequency
-  float torsion_factor = 1.0 + frequency_energy * 3.0;
-  p.yz *= rot(iTime * torsion_factor + a * 2.);
+  // Long cube shape
+  scene = min(scene, sdBox(p, vec3(10., vec2(0.25 - 0.1 * lw))));
   
-  // Long cube shape with frequency-based size variation
-  float size_variation = 0.25 - 0.1 * lw * (1.0 + spell_intensity * 0.5);
-  scene = min(scene, sdBox(p, vec3(10., vec2(size_variation))));
-  
-  // Long cylinder cutting the box with frequency influence
-  float cylinder_size = 0.3 - 0.2 * lw * (1.0 + frequency_energy * 2.0);
-  scene = max(scene, -sdCylinder(p.zy, cylinder_size));
+  // Long cylinder cutting the box (intersection difference)
+  scene = max(scene, -sdCylinder(p.zy, 0.3 - 0.2 * lw));
   return scene;
 }
 
-// Distance function for the chain - ENHANCED WITH PER-CHAIN FREQUENCY
+// Distance function for the chain
 float mapChain(vec3 p) {
   float scene = 1.;
   
-  // Number of chains based on complexity setting (limit to 32 for frequency bands)
-  int maxChains = min(int(chainComplexity), 32);
+  // Number of chain - NOW CONTROLLED BY UNIFORM
+  float count = chainComplexity;
   
   // Size of chain
   vec2 size = vec2(0.1, 0.02);
   
-  // Generate chains with individual frequency control
-  for (int i = 0; i < 32; i++) {
-    if (i >= maxChains) break;
-    
-    // First set of chains with frequency control
-    float torus = sdTorus(posChain(p, float(maxChains), i).yxz, size);
-    scene = smin(scene, torus, 0.1);
-    
-    // Second set of chains with rotation offset
-    vec3 p2 = p;
-    p2.xz *= rot(PI / float(maxChains));
-    scene = min(scene, sdTorus(posChain(p2, float(maxChains), i).xyz, size));
-  }
+  // First set of chains
+  float torus = sdTorus(posChain(p, count).yxz, size);
+  scene = smin(scene, torus, 0.1);
   
+  // Second set of chains
+  p.xz *= rot(PI / count);
+  scene = min(scene, sdTorus(posChain(p, count).xyz, size));
   return scene;
 }
 
@@ -238,38 +204,28 @@ vec3 posCore(vec3 p, float count) {
   return p;
 }
 
-// Distance field for the core thing in the center - ENHANCED
+// Distance field for the core thing in the center
 float mapCore(vec3 p) {
   float scene = 1.;
   
-  // Number of torus repeated
-  float count = spellCount * 2.0;
+  // Number of torus repeated - NOW CONTROLLED BY UNIFORM
+  float count = spellCount * 2.0; // Multiply by 2 for more visual complexity
   float a = p.x * 2.;
   
-  // Calculate average frequency energy for core effects
-  float avg_frequency = 0.0;
-  for (int i = 0; i < 32; i++) {
-    avg_frequency += u_frequency_bands[i];
-  }
-  avg_frequency /= 32.0;
-  
-  // Displace space - Storm intensity affects rotation speed with frequency
-  float stormFactor = 1.0 + stormIntensity * 2.0 + avg_frequency * 5.0;
+  // Displace space - Storm intensity affects rotation speed
+  float stormFactor = 1.0 + stormIntensity * 2.0;
   p.xz *= rot(p.y * 6.);
   p.xz *= rot(iTime * stormFactor);
   p.xy *= rot(iTime * 0.5 * stormFactor);
   p.yz *= rot(iTime * 1.5 * stormFactor);
   vec3 p1 = posCore(p, count);
-  
-  // Size variation based on average frequency
-  vec2 size = vec2(0.1, 0.2) * (1.0 + avg_frequency * 3.0);
+  vec2 size = vec2(0.1, 0.2);
   
   // Tentacles torus shape
   scene = min(scene, sdTorus(p1.xzy * 1.5, size));
   
   // Sphere used for intersection difference with the toruses
-  float sphere_size = 0.6 * (1.0 + avg_frequency * 2.0);
-  scene = max(-scene, sdSphere(p, sphere_size));
+  scene = max(-scene, sdSphere(p, 0.6));
   return scene;
 }
 
@@ -285,15 +241,11 @@ void main() {
   vec2 seed = dpos + fract(iTime);
   
   float shade = 0.;
-  float totalDistance = 0.;
-  
-  // Calculate which chain we're primarily looking at for color
-  float a = atan(pos.z, pos.x);
-  int primaryChain = int(mod(a / TAU * chainComplexity + 0.5, 32.0));
+  float totalDistance = 0.; // Track total distance for fog
   
   for (float i = 0.; i < STEPS; ++i) {
-    // Distance from the different shapes with frequency control
-    float distSpell = min(mapSpell(pos, primaryChain), mapCore(pos));
+    // Distance from the different shapes
+    float distSpell = min(mapSpell(pos), mapCore(pos));
     float distChain = mapChain(pos);
     float dist = min(distSpell, distChain);
     
@@ -324,21 +276,12 @@ void main() {
   // Color from the normalized steps
   float normalizedShade = shade / (STEPS - 1.);
   
-  // Apply color intensity with frequency influence
-  float frequency_boost = 1.0 + u_frequency_bands[clamp(primaryChain, 0, 31)] * 2.0;
-  vec3 baseColor = vec3(normalizedShade * colorIntensity * frequency_boost);
-  
-  // Add frequency-based color variation
-  float hueShift = float(primaryChain) / 32.0;
-  baseColor *= vec3(
-    1.0 + sin(hueShift * TAU) * 0.3,
-    1.0 + sin(hueShift * TAU + TAU/3.0) * 0.3,
-    1.0 + sin(hueShift * TAU + 2.0*TAU/3.0) * 0.3
-  );
+  // Apply color intensity
+  vec3 baseColor = vec3(normalizedShade * colorIntensity);
   
   // Apply fog based on distance
   float fogAmount = 1.0 - exp(-totalDistance * fogDensity * 0.05);
-  vec3 fogColor = vec3(0.0);
+  vec3 fogColor = vec3(0.0); // Black fog
   vec3 finalColor = mix(baseColor, fogColor, fogAmount);
   
   gl_FragColor = vec4(finalColor, 1.0);
@@ -370,35 +313,7 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         spellCount: { value: config.spellCount },
         chainComplexity: { value: config.chainComplexity },
         stormIntensity: { value: config.stormIntensity },
-        // NEW: Array of 32 frequency bands for individual chain control
-        u_frequency_bands: { value: new Array(32).fill(0.0) },
     }), []); // Empty dependency array to avoid recreating uniforms
-
-    // Function to extract 32 frequency bands from audio data
-    const extractFrequencyBands = (frequencies: Uint8Array): number[] => {
-        const bands = new Array(32);
-        const frequencyBinCount = frequencies.length;
-
-        // Create 32 logarithmically distributed frequency bands
-        for (let i = 0; i < 32; i++) {
-            // Logarithmic distribution for better frequency coverage
-            const startBin = Math.floor(Math.pow(i / 32, 2) * frequencyBinCount);
-            const endBin = Math.floor(Math.pow((i + 1) / 32, 2) * frequencyBinCount);
-
-            // Calculate average magnitude for this band
-            let sum = 0;
-            let count = 0;
-            for (let bin = startBin; bin < Math.min(endBin, frequencyBinCount); bin++) {
-                sum += frequencies[bin] / 255.0; // Normalize to 0-1
-                count++;
-            }
-
-            // Store the average magnitude for this frequency band
-            bands[i] = count > 0 ? sum / count : 0;
-        }
-
-        return bands;
-    };
 
     // Handle mouse events
     useEffect(() => {
@@ -482,13 +397,6 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         material.uniforms.spellCount.value = config.spellCount;
         material.uniforms.chainComplexity.value = config.chainComplexity;
         material.uniforms.stormIntensity.value = config.stormIntensity;
-
-        // Update frequency bands from audio data
-        const frequencies = audioData.frequencies;
-        if (frequencies) {
-            const bands = extractFrequencyBands(frequencies);
-            material.uniforms.u_frequency_bands.value = bands;
-        }
     });
 
     // Change cursor on drag
