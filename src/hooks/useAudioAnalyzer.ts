@@ -72,15 +72,15 @@ const ENVELOPE_CONFIG = {
 
 const DROP_CONFIG = {
   decay: 0.95,
-  threshold: 0.5,
+  threshold: 0.15, // FIXED: Réduit de 0.5 à 0.15 pour détecter des changements plus subtils
   cooldown: 500,
 };
 
 const TRANSIENT_CONFIG = {
-  bass: { threshold: 0.08, multiplier: 1.8, decay: 0.85 },     // Reduced from 0.12
-  mid: { threshold: 0.07, multiplier: 2.0, decay: 0.9 },      // Reduced from 0.10
-  treble: { threshold: 0.06, multiplier: 2.2, decay: 0.92 },  // Reduced from 0.08
-  overall: { threshold: 0.12, multiplier: 1.7, decay: 0.88 }, // Reduced from 0.15
+  bass: { threshold: 0.06, multiplier: 1.6, decay: 0.85 },     // FIXED: Réduit de 0.08 à 0.06
+  mid: { threshold: 0.05, multiplier: 1.8, decay: 0.9 },      // FIXED: Réduit de 0.07 à 0.05
+  treble: { threshold: 0.04, multiplier: 2.0, decay: 0.92 },  // FIXED: Réduit de 0.06 à 0.04
+  overall: { threshold: 0.07, multiplier: 1.5, decay: 0.88 }, // FIXED: Réduit de 0.12 à 0.07, multiplier de 1.7 à 1.5
 };
 
 // Musical note frequencies (A4 = 440Hz)
@@ -185,6 +185,9 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
   const prevNormalizedEnergyRef = useRef(0);
   const dropIntensityRef = useRef(0);
   const lastDropTimeRef = useRef(0);
+
+  // NOUVEAU: Historique d'énergie pour la détection adaptative
+  const energyHistoryRef = useRef<number[]>(new Array(20).fill(0.1));
 
   // NEW: YIN Pitch Detector for superior fundamental frequency detection
   const yinDetectorRef = useRef<YINPitchDetector | null>(null);
@@ -590,15 +593,94 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
     const now = Date.now();
     const surge = normalizedEnergy - prevNormalizedEnergyRef.current;
 
-    if (surge > DROP_CONFIG.threshold && now - lastDropTimeRef.current > DROP_CONFIG.cooldown) {
-      dropIntensityRef.current = Math.min(1, surge);
+    // FIXED: Améliorations pour éviter le blocage à 0%
+
+    // 1. Seuil adaptatif basé sur l'historique récent
+    const recentEnergyAvg = energyHistoryRef.current.reduce((a, b) => a + b, 0) / energyHistoryRef.current.length;
+    const adaptiveThreshold = Math.max(DROP_CONFIG.threshold, recentEnergyAvg * 0.3);
+
+    // 2. Détection de surge améliorée avec multiple conditions
+    const relativeSurge = prevNormalizedEnergyRef.current > 0 ? surge / prevNormalizedEnergyRef.current : surge;
+    const absoluteSurge = surge;
+    const energySpike = normalizedEnergy > recentEnergyAvg * 1.4; // Spike absolu
+
+    // 3. Conditions multiples pour déclenchement
+    const conditionMet = (
+      (absoluteSurge > adaptiveThreshold && now - lastDropTimeRef.current > DROP_CONFIG.cooldown) ||
+      (relativeSurge > 0.25 && absoluteSurge > 0.05 && now - lastDropTimeRef.current > DROP_CONFIG.cooldown) ||
+      (energySpike && absoluteSurge > 0.03 && now - lastDropTimeRef.current > DROP_CONFIG.cooldown / 2)
+    );
+
+    if (conditionMet) {
+      // 4. Intensité basée sur la meilleure condition qui a déclenché
+      let intensity = 0;
+      if (absoluteSurge > adaptiveThreshold) {
+        intensity = Math.min(1, absoluteSurge * 2); // Amplification
+      } else if (relativeSurge > 0.25) {
+        intensity = Math.min(1, relativeSurge * 1.5);
+      } else if (energySpike) {
+        intensity = Math.min(1, (normalizedEnergy / recentEnergyAvg) * 0.4);
+      }
+
+      dropIntensityRef.current = Math.max(dropIntensityRef.current, intensity); // Prendre le max
       lastDropTimeRef.current = now;
+
+      // FIXED: Debug logging amélioré
+      console.log(`🔥 Drop detected! Type: ${absoluteSurge > adaptiveThreshold ? 'Absolute' : relativeSurge > 0.25 ? 'Relative' : 'Spike'} | Surge: ${surge.toFixed(3)} | Energy: ${normalizedEnergy.toFixed(3)} | Intensity: ${intensity.toFixed(3)}`);
+    }
+
+    // 5. FIXED: Déclin plus graduel pour éviter de tomber à 0 trop vite
+    const decayRate = dropIntensityRef.current > 0.1 ? DROP_CONFIG.decay : Math.max(DROP_CONFIG.decay, 0.98);
+    dropIntensityRef.current *= decayRate;
+
+    // 6. Plancher minimum pour éviter le blocage complet
+    if (dropIntensityRef.current < 0.001) {
+      dropIntensityRef.current = 0;
     }
 
     prevNormalizedEnergyRef.current = normalizedEnergy;
-    dropIntensityRef.current *= DROP_CONFIG.decay;
 
     return dropIntensityRef.current;
+  };
+
+  // NOUVEAU: Amélioration de la détection d'énergie pour musique normale
+  const calculateEnhancedEnergy = (frequencies: Uint8Array, waveform: Uint8Array): number => {
+    // Calcul d'énergie plus robuste combinant plusieurs métriques
+    let spectralEnergy = 0;
+    let rmsEnergy = 0;
+    let peakEnergy = 0;
+
+    // 1. Énergie spectrale pondérée (favorise les fréquences importantes)
+    for (let i = 1; i < frequencies.length - 1; i++) {
+      const magnitude = frequencies[i] / 255;
+      const freq = (i / frequencies.length) * 22050; // Approximation
+
+      // Pondération perceptuelle simple (favorise 200Hz-4kHz)
+      let weight = 1.0;
+      if (freq >= 200 && freq <= 4000) {
+        weight = 1.5; // Boost des fréquences importantes
+      } else if (freq < 80 || freq > 8000) {
+        weight = 0.5; // Atténue les extrêmes
+      }
+
+      spectralEnergy += magnitude * magnitude * weight;
+    }
+    spectralEnergy = Math.sqrt(spectralEnergy / frequencies.length);
+
+    // 2. Énergie RMS du signal temporel
+    for (let i = 0; i < waveform.length; i++) {
+      const sample = (waveform[i] - 128) / 128;
+      rmsEnergy += sample * sample;
+    }
+    rmsEnergy = Math.sqrt(rmsEnergy / waveform.length);
+
+    // 3. Détection de pics (pour percussions)
+    peakEnergy = Math.max(...Array.from(frequencies)) / 255;
+
+    // Combinaison pondérée des trois métriques
+    const combinedEnergy = spectralEnergy * 0.6 + rmsEnergy * 0.3 + peakEnergy * 0.1;
+
+    return combinedEnergy;
   };
 
   useEffect(() => {
@@ -692,6 +774,13 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       const spectralFeatures = calculateSpectralFeatures(frequencies, sampleRate);
       const melodicFeatures = calculateMelodicFeatures(waveform, frequencies, sampleRate);
 
+      // NOUVEAU: Utiliser l'énergie améliorée au lieu de l'ancienne méthode
+      const enhancedEnergy = calculateEnhancedEnergy(frequencies, waveform);
+
+      // Garder l'ancienne énergie pour compatibilité, mais utiliser la nouvelle pour la détection
+      const originalEnergy = energy;
+      energy = enhancedEnergy;
+
       const dynamicBands = {
         bass: calculateDynamicValue(bands.bass, bandEnvelopeRef.current.bass),
         mid: calculateDynamicValue(bands.mid, bandEnvelopeRef.current.mid),
@@ -699,8 +788,28 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       };
 
       const normalizedEnergy = calculateDynamicValue(energy, energyEnvelopeRef.current);
+
+      // NOUVEAU: Mettre à jour l'historique d'énergie pour la détection adaptative
+      energyHistoryRef.current.push(normalizedEnergy);
+      if (energyHistoryRef.current.length > 20) {
+        energyHistoryRef.current.shift();
+      }
+
       const dropIntensity = detectDrop(normalizedEnergy);
       const transients = detectTransients(bands, energy);
+
+      // NOUVEAU: Diagnostics périodiques pour comprendre les valeurs
+      const frameCount = performance.now();
+      if (Math.floor(frameCount / 2000) !== Math.floor((frameCount - 16) / 2000)) { // Log toutes les 2 secondes
+        console.log(`🔍 Audio Diagnostics:
+          Energy: ${energy.toFixed(3)} (orig: ${originalEnergy.toFixed(3)})
+          Normalized Energy: ${normalizedEnergy.toFixed(3)}
+          Drop Intensity: ${dropIntensity.toFixed(3)}
+          Transients: B:${transients.bass} M:${transients.mid} T:${transients.treble} O:${transients.overall}
+          Bands: B:${bands.bass.toFixed(2)} M:${bands.mid.toFixed(2)} T:${bands.treble.toFixed(2)}
+          Dynamic: B:${dynamicBands.bass.toFixed(2)} M:${dynamicBands.mid.toFixed(2)} T:${dynamicBands.treble.toFixed(2)}
+          Spectral Flux: ${spectralFeatures.flux.toFixed(3)}`);
+      }
 
       // Update YIN detector with real sample rate if needed
       if (yinDetectorRef.current && yinDetectorRef.current.updateSampleRate) {

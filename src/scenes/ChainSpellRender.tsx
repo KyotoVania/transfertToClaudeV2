@@ -30,6 +30,13 @@ interface ChainSpellSettings {
     midChainIntensity: number;
     trebleChainIntensity: number;
     melodicHighlightIntensity: number;
+
+    // Chain Break Animation Settings
+    chainBreakEnabled: boolean;
+    chainBreakSensitivity: number;
+    chainBreakDuration: number;
+    chainBreakIntensity: number;
+    chainBreakCooldown: number;
 }
 
 // Note frequencies for musical scale mode (from HarmonicGridV2)
@@ -74,6 +81,11 @@ uniform float frequencyData[64];
 uniform float bassChainIntensity;
 uniform float midChainIntensity;
 uniform float trebleChainIntensity;
+
+// Chain break animation uniforms
+uniform float chainBreakIntensity;
+uniform bool chainBreakActive;
+uniform float chainBreakPhase;
 
 varying vec2 vUv;
 
@@ -191,20 +203,34 @@ vec3 camera(vec3 p) {
   return p;
 }
 
-// Position of chain - chainComplexity controls the detail of each segment
+// Position of chain - FUSION of original and new system
 vec3 posChain(vec3 p) {
   float za = atan(p.z, p.x);
   vec3 dir = normalize(p);
 
-  // Use chainComplexity for internal detail of each chain segment
+  // Use chainComplexity for internal detail
   vec3 m = moda(p.xz, chainComplexity);
   p.xz = m.xy;
   
-  // Static chains (no breaking animation)
+  // INTEGRATION: Chain break animation controlled by audio
   float lw = 0.0;
+  if (chainBreakActive) {
+    // Reuse original logic but controlled by uniforms
+    lw = getLocalWave(m.z / PI) * chainBreakIntensity * chainBreakPhase;
+    
+    // Animation of breaking chain (ORIGINAL CODE REINTEGRATED)
+    float r1 = lw * smoothstep(0.1, 0.5, lw);
+    float r2 = lw * smoothstep(0.4, 0.6, lw);
+    p += dir * mix(0., 0.3 * sin(floor(za * 3.)), r1);
+    p += dir * mix(0., 0.8 * sin(floor(za * 60.)), r2);
+    
+    // Rotate chain for animation smoothness
+    float a = lw * 0.3;
+    p.xy *= rot(a);
+    p.xz *= rot(a);
+  }
   
-  // FIXED: Increased radius from 1.0 to 1.5 to give more space between chains
-  // This prevents visual compression when we have many chain segments
+  // Static chains (system actual)
   p.x -= 1.5 - 0.1 * lw;
 
   // The chain shape detail
@@ -373,6 +399,86 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
     const melodicHighlightRef = useRef<number[]>(new Array(64).fill(0));
     const frameCount = useRef<number>(0);
 
+    // Chain break animation state
+    const chainBreakState = useRef({
+        isActive: false,
+        startTime: 0,
+        duration: 2.5, // seconds
+        cooldownTime: 1.0, // seconds between animations
+        lastTrigger: 0
+    });
+
+    // Determine if chain break should trigger based on multiple audio criteria
+    const shouldTriggerBreak = (audioData: AudioData, config: ChainSpellSettings) => {
+        const now = performance.now() / 1000;
+        const timeSinceLastTrigger = now - chainBreakState.current.lastTrigger;
+
+        // Cooldown check - Plus flexible pour différents types de musique
+        if (timeSinceLastTrigger < config.chainBreakCooldown) return false;
+
+        // SYSTÈME DE SCORE SIMPLIFIÉ ET EFFICACE
+        let triggerScore = 0;
+
+        // 1. Déclencheurs principaux (plus accessibles)
+        if (audioData.transients.overall) triggerScore += 2;
+        if (audioData.dropIntensity > config.chainBreakSensitivity) triggerScore += 3;
+
+        // 2. Déclencheurs d'énergie (patterns améliorés)
+        const energyThreshold = 0.6;
+        if (audioData.energy > energyThreshold) {
+            const energyIntensity = (audioData.energy - energyThreshold) / (1.0 - energyThreshold);
+            triggerScore += Math.floor(energyIntensity * 3); // 0-3 points selon l'intensité
+        }
+
+        // 3. Déclencheurs de bandes fréquentielles
+        if (audioData.dynamicBands.bass > 0.7) triggerScore += 1;
+        if (audioData.dynamicBands.mid > 0.7) triggerScore += 1;
+        if (audioData.dynamicBands.treble > 0.7) triggerScore += 1;
+
+        // 4. Déclencheurs de transients spécifiques
+        if (audioData.transients.bass && audioData.transients.treble) triggerScore += 2;
+        else if (audioData.transients.bass || audioData.transients.treble) triggerScore += 1;
+
+        // 5. Déclencheur de variance spectrale (pour détecter les changements)
+        const spectralVariance = audioData.frequencies.reduce((acc, freq, i, arr) => {
+            if (i === 0) return acc;
+            return acc + Math.abs(freq - arr[i-1]);
+        }, 0) / audioData.frequencies.length;
+
+        if (spectralVariance > 15) {
+            triggerScore += 1;
+        }
+
+        // 6. Déclencheur de pic mélodique
+        if (audioData.melodicFeatures.noteConfidence > 0.8) {
+            triggerScore += 1;
+        }
+
+        // 7. Déclencheur de changement spectral (nouveau)
+        if (audioData.spectralFeatures.flux > 0.7) {
+            triggerScore += 1;
+        }
+
+        // SEUIL ADAPTATIF basé sur le type de contenu
+        let requiredScore = 3; // Seuil de base
+
+        // Ajustement du seuil selon le contexte
+        if (audioData.transients.overall) {
+            requiredScore = 2; // Plus facile avec des transients
+        } else if (audioData.energy > 0.8) {
+            requiredScore = 2; // Plus facile avec haute énergie
+        } else if (audioData.rhythmicFeatures.bpm > 0 && audioData.rhythmicFeatures.bpm < 100) {
+            requiredScore = 2; // Plus facile pour musique lente
+        }
+
+        // Debug logging pour comprendre le scoring
+        if (triggerScore > 0) {
+            console.log(`🎵 Chain break score: ${triggerScore}/${requiredScore} | Energy: ${audioData.energy.toFixed(2)} | Drop: ${audioData.dropIntensity.toFixed(2)} | Transients: ${audioData.transients.overall}`);
+        }
+
+        return triggerScore >= requiredScore;
+    };
+
     // Create frequency mapping based on scale type (from HarmonicGridV2)
     const createFrequencyMapping = (numSegments: number, numFreqBins: number, scale: string, sampleRate: number) => {
         const mapping: number[] = [];
@@ -470,6 +576,11 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         bassChainIntensity: { value: config.bassChainIntensity },
         midChainIntensity: { value: config.midChainIntensity },
         trebleChainIntensity: { value: config.trebleChainIntensity },
+
+        // Chain break animation uniforms
+        chainBreakActive: { value: false },
+        chainBreakIntensity: { value: 0 },
+        chainBreakPhase: { value: 0 },
     }), []); // Empty dependency array to avoid recreating uniforms
 
     // Handle mouse events
@@ -709,6 +820,54 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
             // Update shader uniform
             material.uniforms.frequencyData.value = frequencyDataRef.current;
         }
+
+        // --- Chain Break Animation Logic ---
+        const now = state.clock.elapsedTime;
+
+        // Check for trigger
+        if (config.chainBreakEnabled && !chainBreakState.current.isActive) {
+            if (shouldTriggerBreak(audioData, config)) {
+                // Trigger the animation
+                chainBreakState.current.isActive = true;
+                chainBreakState.current.startTime = now;
+                chainBreakState.current.lastTrigger = now;
+                console.log('🔗⚡ Chain break triggered! Score-based detection');
+            }
+        }
+
+        // Update animation state
+        if (chainBreakState.current.isActive) {
+            const elapsed = now - chainBreakState.current.startTime;
+            const normalizedTime = Math.min(elapsed / config.chainBreakDuration, 1);
+
+            // Animation curve: Quick rise (0-0.3), hold (0.3-0.7), slow fall (0.7-1.0)
+            let animationPhase = 0;
+            if (normalizedTime < 0.3) {
+                animationPhase = normalizedTime / 0.3; // Rise
+            } else if (normalizedTime < 0.7) {
+                animationPhase = 1.0; // Hold
+            } else {
+                animationPhase = 1.0 - ((normalizedTime - 0.7) / 0.3); // Fall
+            }
+
+            // Update shader uniforms
+            material.uniforms.chainBreakActive.value = true;
+            material.uniforms.chainBreakIntensity.value = config.chainBreakIntensity;
+            material.uniforms.chainBreakPhase.value = animationPhase;
+
+            // End animation
+            if (normalizedTime >= 1) {
+                chainBreakState.current.isActive = false;
+                material.uniforms.chainBreakActive.value = false;
+                material.uniforms.chainBreakIntensity.value = 0;
+                material.uniforms.chainBreakPhase.value = 0;
+            }
+        } else {
+            // Ensure uniforms are reset when not active
+            material.uniforms.chainBreakActive.value = false;
+            material.uniforms.chainBreakIntensity.value = 0;
+            material.uniforms.chainBreakPhase.value = 0;
+        }
     });
 
     // Change cursor on drag
@@ -774,6 +933,16 @@ const schema: SceneSettingsSchema = {
     midChainIntensity: { type: 'slider', label: 'Mid Intensity', min: 0.5, max: 3, step: 0.1 },
     trebleChainIntensity: { type: 'slider', label: 'Treble Intensity', min: 0.5, max: 3, step: 0.1 },
     melodicHighlightIntensity: { type: 'slider', label: 'Melodic Highlight', min: 0.5, max: 3, step: 0.1 },
+
+    // Chain Break Animation Settings
+    chainBreakEnabled: { type: 'select', label: 'Chain Break Animation', options: [
+            { value: 'true', label: 'Enabled' },
+            { value: 'false', label: 'Disabled' },
+        ]},
+    chainBreakSensitivity: { type: 'slider', label: 'Break Sensitivity', min: 0.1, max: 1.0, step: 0.1 },
+    chainBreakDuration: { type: 'slider', label: 'Break Duration', min: 1.0, max: 5.0, step: 0.1 },
+    chainBreakIntensity: { type: 'slider', label: 'Break Intensity', min: 0.5, max: 3.0, step: 0.1 },
+    chainBreakCooldown: { type: 'slider', label: 'Break Cooldown', min: 0.5, max: 3.0, step: 0.1 },
 };
 
 export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
@@ -801,6 +970,13 @@ export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
             midChainIntensity: 1.2,
             trebleChainIntensity: 1.8,
             melodicHighlightIntensity: 2.5,
+
+            // Chain break defaults
+            chainBreakEnabled: true,
+            chainBreakSensitivity: 0.7,
+            chainBreakDuration: 2.5,
+            chainBreakIntensity: 1.5,
+            chainBreakCooldown: 1.0,
         },
         schema,
     },
