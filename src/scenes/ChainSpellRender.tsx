@@ -24,6 +24,7 @@ interface ChainSpellSettings {
     frequencyScale: 'linear' | 'logarithmic' | 'mel' | 'musical';
     melodicVisualization: boolean;
     harmonicResonance: boolean;
+    chromaColorMode: boolean; // Added chromatic color mode
 
     // Audio Intensities
     bassChainIntensity: number;
@@ -81,6 +82,8 @@ uniform float frequencyData[64];
 uniform float bassChainIntensity;
 uniform float midChainIntensity;
 uniform float trebleChainIntensity;
+uniform bool chromaColorMode;
+uniform float u_smoothedHue;   
 
 // Chain break animation uniforms
 uniform float chainBreakIntensity;
@@ -100,6 +103,13 @@ varying vec2 vUv;
 
 // Distance minimum 
 #define DIST_MIN 0.01
+
+// HSV to RGB conversion function
+vec3 hsv2rgb(vec3 c) {
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
 
 // Rotation matrix
 mat2 rot(float a) { 
@@ -212,20 +222,27 @@ vec3 posChain(vec3 p) {
   vec3 m = moda(p.xz, chainComplexity);
   p.xz = m.xy;
   
-  // INTEGRATION: Chain break animation controlled by audio
+  // INTEGRATION: Chain break animation controlled by audio - REDUCED INTENSITY
   float lw = 0.0;
   if (chainBreakActive) {
-    // Reuse original logic but controlled by uniforms
+    // Reuse original logic but controlled by uniforms with reduced intensity
     lw = getLocalWave(m.z / PI) * chainBreakIntensity * chainBreakPhase;
     
-    // Animation of breaking chain (ORIGINAL CODE REINTEGRATED)
+    // Animation of breaking chain - SIGNIFICANTLY REDUCED VALUES for subtle effect
+    // These values create a gentle distortion that complements rather than dominates
+    // the normal audio-reactive animation
     float r1 = lw * smoothstep(0.1, 0.5, lw);
     float r2 = lw * smoothstep(0.4, 0.6, lw);
-    p += dir * mix(0., 0.3 * sin(floor(za * 3.)), r1);
-    p += dir * mix(0., 0.8 * sin(floor(za * 60.)), r2);
     
-    // Rotate chain for animation smoothness
-    float a = lw * 0.3;
+    // CRITICAL CHANGE: Massive reduction in displacement intensity
+    // Original: 0.3 and 0.8 → New: 0.1 and 0.3 (70% reduction)
+    // This ensures the break animation is visible but not overwhelming
+    p += dir * mix(0., 0.1 * sin(floor(za * 3.)), r1);   // Low frequency displacement
+    p += dir * mix(0., 0.3 * sin(floor(za * 60.)), r2);  // High frequency detail
+    
+    // Reduced rotation intensity for smoother animation
+    // Original: 0.3 → New: 0.15 (50% reduction)
+    float a = lw * 0.15;
     p.xy *= rot(a);
     p.xz *= rot(a);
   }
@@ -343,13 +360,13 @@ void main() {
     float dist = min(distSpell, distChain);
     
     if (dist < BIAS) {
-      shade += 1.;
       
       if (distChain < distSpell) {
         hitSegmentIndex = currentSegmentIndex; // Remember which segment was hit
-        shade = STEPS - i - 1.;
+        shade = (STEPS - i - 1.); // Make shade stronger
         break;
       }
+      shade += 1.;
     }
     
     dist = abs(dist) * (0.8 + 0.2 * rand(seed * vec2(i)));
@@ -359,13 +376,16 @@ void main() {
   }
   
   float normalizedShade = shade / (STEPS - 1.);
-  vec3 baseColor = vec3(normalizedShade * colorIntensity);
-  
-  // DEBUG: Color based on segment index
-  bool debugMode = false; // Set to true to see segment mapping
-  if (debugMode && hitSegmentIndex >= 0.0) {
-    float hue = hitSegmentIndex / chainSegments;
-    baseColor = vec3(hue, 1.0, 1.0); // HSV to RGB would be better but this is simple
+  vec3 baseColor = vec3(0.0);
+
+  // MODIFIEZ CE BLOC
+  if (normalizedShade > 0.0) {
+      if (chromaColorMode) {
+          // Utilise directement la teinte lissée
+          baseColor = hsv2rgb(vec3(u_smoothedHue, 0.8, normalizedShade));
+      } else {
+          baseColor = vec3(normalizedShade * colorIntensity);
+      }
   }
   
   // Apply fog only if enabled
@@ -398,6 +418,7 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
     const frequencyDataRef = useRef<Float32Array>(new Float32Array(64));
     const melodicHighlightRef = useRef<number[]>(new Array(64).fill(0));
     const frameCount = useRef<number>(0);
+    const smoothedHueRef = useRef<number>(0); // AJOUTEZ CETTE LIGNE
 
     // Chain break animation state
     const chainBreakState = useRef({
@@ -416,64 +437,65 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         // Cooldown check - Plus flexible pour différents types de musique
         if (timeSinceLastTrigger < config.chainBreakCooldown) return false;
 
-        // SYSTÈME DE SCORE SIMPLIFIÉ ET EFFICACE
+        // SYSTÈME DE SCORE OPTIMISÉ POUR RÉDUIRE LES DÉCLENCHEMENTS
         let triggerScore = 0;
 
-        // 1. Déclencheurs principaux (plus accessibles)
+        // 1. Déclencheurs principaux (seuils augmentés)
         if (audioData.transients.overall) triggerScore += 2;
-        if (audioData.dropIntensity > config.chainBreakSensitivity) triggerScore += 3;
+        if (audioData.dropIntensity > config.chainBreakSensitivity + 0.1) triggerScore += 3; // Seuil augmenté
 
-        // 2. Déclencheurs d'énergie (patterns améliorés)
-        const energyThreshold = 0.6;
+        // 2. Déclencheurs d'énergie (seuils plus stricts)
+        const energyThreshold = 0.75; // Augmenté de 0.6 à 0.75
         if (audioData.energy > energyThreshold) {
             const energyIntensity = (audioData.energy - energyThreshold) / (1.0 - energyThreshold);
-            triggerScore += Math.floor(energyIntensity * 3); // 0-3 points selon l'intensité
+            triggerScore += Math.floor(energyIntensity * 2); // Réduit de 3 à 2 points max
         }
 
-        // 3. Déclencheurs de bandes fréquentielles
-        if (audioData.dynamicBands.bass > 0.7) triggerScore += 1;
-        if (audioData.dynamicBands.mid > 0.7) triggerScore += 1;
-        if (audioData.dynamicBands.treble > 0.7) triggerScore += 1;
+        // 3. Déclencheurs de bandes fréquentielles (seuils plus stricts)
+        if (audioData.dynamicBands.bass > 0.8) triggerScore += 1; // Augmenté de 0.7 à 0.8
+        if (audioData.dynamicBands.mid > 0.8) triggerScore += 1;
+        if (audioData.dynamicBands.treble > 0.8) triggerScore += 1;
 
-        // 4. Déclencheurs de transients spécifiques
-        if (audioData.transients.bass && audioData.transients.treble) triggerScore += 2;
-        else if (audioData.transients.bass || audioData.transients.treble) triggerScore += 1;
+        // 4. Déclencheurs de transients spécifiques (points réduits)
+        if (audioData.transients.bass && audioData.transients.treble) triggerScore += 1; // Réduit de 2 à 1
+        else if (audioData.transients.bass || audioData.transients.treble) triggerScore += 0.5; // Réduit de 1 à 0.5
 
-        // 5. Déclencheur de variance spectrale (pour détecter les changements)
+        // 5. Déclencheur de variance spectrale (seuil augmenté)
         const spectralVariance = audioData.frequencies.reduce((acc, freq, i, arr) => {
             if (i === 0) return acc;
             return acc + Math.abs(freq - arr[i-1]);
         }, 0) / audioData.frequencies.length;
 
-        if (spectralVariance > 15) {
-            triggerScore += 1;
+        if (spectralVariance > 20) { // Augmenté de 15 à 20
+            triggerScore += 0.5; // Réduit de 1 à 0.5
         }
 
-        // 6. Déclencheur de pic mélodique
-        if (audioData.melodicFeatures.noteConfidence > 0.8) {
-            triggerScore += 1;
+        // 6. Déclencheur de pic mélodique (seuil augmenté)
+        if (audioData.melodicFeatures.noteConfidence > 0.9) { // Augmenté de 0.8 à 0.9
+            triggerScore += 0.5; // Réduit de 1 à 0.5
         }
 
-        // 7. Déclencheur de changement spectral (nouveau)
-        if (audioData.spectralFeatures.flux > 0.7) {
-            triggerScore += 1;
+        // 7. Déclencheur de changement spectral (seuil augmenté)
+        if (audioData.spectralFeatures.flux > 0.8) { // Augmenté de 0.7 à 0.8
+            triggerScore += 0.5; // Réduit de 1 à 0.5
         }
 
-        // SEUIL ADAPTATIF basé sur le type de contenu
-        let requiredScore = 3; // Seuil de base
+        // SEUIL ADAPTATIF augmenté pour réduire les faux déclenchements
+        let requiredScore = 4; // Augmenté de 3 à 4
 
-        // Ajustement du seuil selon le contexte
-        if (audioData.transients.overall) {
-            requiredScore = 2; // Plus facile avec des transients
-        } else if (audioData.energy > 0.8) {
-            requiredScore = 2; // Plus facile avec haute énergie
-        } else if (audioData.rhythmicFeatures.bpm > 0 && audioData.rhythmicFeatures.bpm < 100) {
-            requiredScore = 2; // Plus facile pour musique lente
+        // Ajustement du seuil selon le contexte (moins permissif)
+        if (audioData.transients.overall && audioData.energy > 0.8) {
+            requiredScore = 3; // Nécessite les deux conditions
+        } else if (audioData.energy > 0.9) { // Seuil augmenté de 0.8 à 0.9
+            requiredScore = 3;
+        } else if (audioData.rhythmicFeatures.bpm > 0 && audioData.rhythmicFeatures.bpm < 80) { // Réduit de 100 à 80 BPM
+            requiredScore = 3;
         }
 
-        // Debug logging pour comprendre le scoring
+        // Debug logging avec score arrondi
         if (triggerScore > 0) {
-            console.log(`🎵 Chain break score: ${triggerScore}/${requiredScore} | Energy: ${audioData.energy.toFixed(2)} | Drop: ${audioData.dropIntensity.toFixed(2)} | Transients: ${audioData.transients.overall}`);
+            const roundedScore = Math.round(triggerScore * 10) / 10;
+            console.log(`🎵 Chain break score: ${roundedScore}/${requiredScore} | Energy: ${audioData.energy.toFixed(2)} | Drop: ${audioData.dropIntensity.toFixed(2)} | Transients: ${audioData.transients.overall}`);
         }
 
         return triggerScore >= requiredScore;
@@ -576,6 +598,8 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         bassChainIntensity: { value: config.bassChainIntensity },
         midChainIntensity: { value: config.midChainIntensity },
         trebleChainIntensity: { value: config.trebleChainIntensity },
+        chromaColorMode: { value: config.chromaColorMode },
+        u_smoothedHue: { value: 0 }, // AJOUTEZ CETTE LIGNE
 
         // Chain break animation uniforms
         chainBreakActive: { value: false },
@@ -674,6 +698,42 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
         material.uniforms.bassChainIntensity.value = config.bassChainIntensity;
         material.uniforms.midChainIntensity.value = config.midChainIntensity;
         material.uniforms.trebleChainIntensity.value = config.trebleChainIntensity;
+        material.uniforms.chromaColorMode.value = config.chromaColorMode;
+
+        // MODIFIEZ CE BLOC - Smoothed hue processing
+        if (config.chromaColorMode && audioData.melodicFeatures.pitchClass) {
+            // 1. Trouver la nouvelle teinte cible
+            let maxChroma = 0.0;
+            let chromaIndex = 0;
+            for (let c = 0; c < 12; c++) {
+                if (audioData.melodicFeatures.pitchClass[c] > maxChroma) {
+                    maxChroma = audioData.melodicFeatures.pitchClass[c];
+                    chromaIndex = c;
+                }
+            }
+            const targetHue = chromaIndex / 12.0;
+
+            // 2. Lisser la teinte actuelle vers la teinte cible
+            const smoothingFactor = 0.05; // Ajustez pour une transition plus ou moins rapide
+            let currentHue = smoothedHueRef.current;
+
+            // Gérer la transition circulaire (ex: de rouge à violet)
+            const diff = targetHue - currentHue;
+            if (Math.abs(diff) > 0.5) {
+                if (diff > 0) {
+                    currentHue += 1.0;
+                } else {
+                    currentHue -= 1.0;
+                }
+            }
+
+            // Appliquer le lissage
+            const newHue = currentHue + (targetHue - currentHue) * smoothingFactor;
+            smoothedHueRef.current = newHue % 1.0; // Garder la valeur entre 0 et 1
+
+            // 3. Envoyer la teinte lissée au shader
+            material.uniforms.u_smoothedHue.value = smoothedHueRef.current;
+        }
 
         // Process audio data if audio reactivity is enabled
         if (config.audioReactivity) {
@@ -840,15 +900,22 @@ const ChainSpellComponent: React.FC<{ audioData: AudioData; config: ChainSpellSe
             const elapsed = now - chainBreakState.current.startTime;
             const normalizedTime = Math.min(elapsed / config.chainBreakDuration, 1);
 
-            // Animation curve: Quick rise (0-0.3), hold (0.3-0.7), slow fall (0.7-1.0)
+            // IMPROVED: Smoother animation curve with progressive fade-in/fade-out
             let animationPhase = 0;
-            if (normalizedTime < 0.3) {
-                animationPhase = normalizedTime / 0.3; // Rise
-            } else if (normalizedTime < 0.7) {
-                animationPhase = 1.0; // Hold
+            if (normalizedTime < 0.2) {
+                // Slower rise (0-0.2) for more progressive start
+                animationPhase = (normalizedTime / 0.2) * (normalizedTime / 0.2); // Quadratic ease-in
+            } else if (normalizedTime < 0.6) {
+                // Extended hold (0.2-0.6) for sustained effect
+                animationPhase = 1.0;
             } else {
-                animationPhase = 1.0 - ((normalizedTime - 0.7) / 0.3); // Fall
+                // Longer, smoother fall (0.6-1.0) for gradual fade-out
+                const fallProgress = (normalizedTime - 0.6) / 0.4;
+                animationPhase = 1.0 - (fallProgress * fallProgress); // Quadratic ease-out
             }
+
+            // Apply additional smoothing to reduce abrupt changes
+            animationPhase = Math.min(1.0, Math.max(0.0, animationPhase));
 
             // Update shader uniforms
             material.uniforms.chainBreakActive.value = true;
@@ -927,6 +994,10 @@ const schema: SceneSettingsSchema = {
             { value: 'true', label: 'On' },
             { value: 'false', label: 'Off' },
         ]},
+    chromaColorMode: { type: 'select', label: 'Chroma Color Mode', options: [
+            { value: 'true', label: 'On' },
+            { value: 'false', label: 'Off' },
+        ]},
 
     // Audio Intensities
     bassChainIntensity: { type: 'slider', label: 'Bass Intensity', min: 0.5, max: 3, step: 0.1 },
@@ -966,19 +1037,19 @@ export const chainSpellScene: SceneDefinition<ChainSpellSettings> = {
             frequencyScale: 'logarithmic',
             melodicVisualization: true,
             harmonicResonance: true,
+            chromaColorMode: true,
             bassChainIntensity: 1.5,
             midChainIntensity: 1.2,
             trebleChainIntensity: 1.8,
             melodicHighlightIntensity: 2.5,
 
-            // Chain break defaults
+            // Chain break defaults - REDUCED VALUES for subtlety
             chainBreakEnabled: true,
-            chainBreakSensitivity: 0.7,
-            chainBreakDuration: 2.5,
-            chainBreakIntensity: 1.5,
-            chainBreakCooldown: 1.0,
+            chainBreakSensitivity: 0.8, // Augmenté de 0.7 à 0.8 (moins sensible)
+            chainBreakDuration: 2.0, // Réduit de 2.5 à 2.0 (plus court)
+            chainBreakIntensity: 0.8, // Réduit de 1.5 à 0.8 (beaucoup moins intense)
+            chainBreakCooldown: 1.5, // Augmenté de 1.0 à 1.5 (plus d'espace entre animations)
         },
         schema,
     },
 };
-
