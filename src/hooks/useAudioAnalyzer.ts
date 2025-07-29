@@ -668,8 +668,7 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       alert("Impossible d'initialiser l'audio. Votre navigateur est peut-être incompatible.");
     }
   };
-
-  // --- NOUVEAU: Fonction publique pour changer de source audio ---
+// --- NOUVEAU: Fonction publique pour changer de source audio ---
   const switchAudioSource = async (source: AudioSourceType) => {
     console.log('🔧 switchAudioSource called with:', source);
 
@@ -727,6 +726,43 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
         }
       }
 
+      // CRITICAL FIX: Ensure audio element is ready to play
+      // This is the key to fixing the issue when returning to file mode
+      if (audioSource) {
+        // If audio is paused or ended, reset it
+        if (audioSource.paused || audioSource.ended) {
+          console.log('🔄 Audio element needs reactivation');
+          audioSource.currentTime = 0; // Reset to beginning if ended
+
+          // Try to play the audio to ensure data flows
+          const playPromise = audioSource.play();
+          if (playPromise !== undefined) {
+            playPromise
+                .then(() => {
+                  console.log('▶️ Audio playback resumed successfully');
+                  // Immediately pause if the user hasn't explicitly pressed play
+                  if (!audioSource.hasAttribute('data-user-initiated')) {
+                    audioSource.pause();
+                    console.log('⏸️ Audio paused (waiting for user action)');
+                  }
+                })
+                .catch(error => {
+                  console.log('⏸️ Auto-play blocked, user action required:', error.message);
+                });
+          }
+        }
+
+        // Ensure audio element is properly connected to the audio graph
+        console.log('🔍 Audio element state:', {
+          paused: audioSource.paused,
+          ended: audioSource.ended,
+          currentTime: audioSource.currentTime,
+          duration: audioSource.duration,
+          readyState: audioSource.readyState,
+          networkState: audioSource.networkState
+        });
+      }
+
       setSourceType('file');
       console.log('▶️ Source activée: Fichier');
     }
@@ -736,45 +772,36 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       if (micGainNodeRef.current) micGainNodeRef.current.gain.setValueAtTime(1, context.currentTime);
       if (fileGainNodeRef.current) fileGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
 
-      // Demander l'accès au micro s'il n'est pas déjà actif
-      if (!mediaStreamRef.current) {
+      // Arrêter et nettoyer le stream du fichier s'il est actif
+      if (fileSourceNodeRef.current) {
+        fileSourceNodeRef.current.disconnect();
+        fileSourceNodeRef.current = null;
+        console.log('🎵 Source fichier désactivée.');
+      }
+
+      // Vérifier si le microphone est déjà connecté
+      if (!micSourceNodeRef.current) {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-          });
+          // Demander l'accès au microphone
+          const stream = await navigator.mediaDevices.getUserMedia({audio: true});
           mediaStreamRef.current = stream;
+
+          // Créer le MediaStreamAudioSourceNode pour le micro
           micSourceNodeRef.current = context.createMediaStreamSource(stream);
           micSourceNodeRef.current.connect(micGainNodeRef.current!);
-          console.log('🎤 Microphone activé et connecté.');
+          micSourceNodeRef.current.connect(analyserRef.current!); // Connecter à l'analyseur
+
+          console.log('🎤 Source microphone connectée.');
         } catch (error) {
-          console.error("Erreur d'accès au microphone:", error);
-          alert("Impossible d'accéder au microphone. Veuillez vérifier les permissions.");
-          // Revenir à un état neutre en cas d'erreur
-          await switchAudioSource('none');
-          return;
+          console.error('❌ Erreur lors de la connexion du microphone:', error);
+          alert("Impossible d'accéder au microphone. Veuillez vérifier vos permissions.");
         }
       }
 
       setSourceType('microphone');
       console.log('▶️ Source activée: Microphone');
     }
-    // Gérer l'état SANS SOURCE
-    else {
-      if (fileGainNodeRef.current) fileGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
-      if (micGainNodeRef.current) micGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-        mediaStreamRef.current = null;
-        if (micSourceNodeRef.current) {
-          micSourceNodeRef.current.disconnect();
-          micSourceNodeRef.current = null;
-        }
-      }
-      setSourceType('none');
-      console.log('⏹️ Aucune source audio active.');
-    }
-  };
-
+  }
   // --- Boucle d'analyse principale ---
   const analyze = () => {
     if (!analyserRef.current) {
