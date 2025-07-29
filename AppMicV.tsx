@@ -1,6 +1,6 @@
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Stats } from '@react-three/drei'
-import { Suspense, useRef, useEffect, useState } from 'react'
+import { Suspense, useRef, useEffect } from 'react'
 import { useAudioAnalyzer } from './hooks/useAudioAnalyzer'
 import { useConfigStore } from './store/configStore'
 import { VisualizationRenderer } from './scenes/VisualizationRenderer'
@@ -8,31 +8,9 @@ import { ConfigPanel } from './components/ConfigPanel'
 
 function App() {
   const audioRef = useRef<HTMLAudioElement>(null)
-  const [audioElement, setAudioElement] = useState<HTMLAudioElement | undefined>(undefined)
-  const { audioData, audioContext } = useAudioAnalyzer(audioElement)
+  const { audioData, sourceType, switchAudioSource } = useAudioAnalyzer(audioRef.current || undefined)
   const { global: globalConfig } = useConfigStore()
   const currentUrlRef = useRef<string | null>(null)
-
-  // Effet pour initialiser l'élément audio quand la ref est prête
-  useEffect(() => {
-    if (audioRef.current && !audioElement) {
-      console.log('🎵 Audio element ready, initializing analyzer');
-      setAudioElement(audioRef.current);
-    }
-  }, [audioElement]);
-
-  // Effet pour forcer l'initialisation au montage du composant
-  useEffect(() => {
-    // Petit délai pour s'assurer que la ref est définie
-    const timer = setTimeout(() => {
-      if (audioRef.current && !audioElement) {
-        console.log('🎵 Force initializing audio element on mount');
-        setAudioElement(audioRef.current);
-      }
-    }, 100);
-
-    return () => clearTimeout(timer);
-  }, []); // Se lance une seule fois au montage
 
   // Add logging for BPM detection and harmony analysis
   useEffect(() => {
@@ -81,11 +59,6 @@ function App() {
       const url = URL.createObjectURL(file)
       currentUrlRef.current = url
       audioRef.current.src = url
-
-      // S'assurer que l'analyzer est initialisé avec le nouvel élément audio
-      if (!audioElement) {
-        setAudioElement(audioRef.current);
-      }
     }
   }
 
@@ -97,16 +70,6 @@ function App() {
       }
     }
   }, [])
-
-  // 2. Ajoutez cette fonction pour gérer la lecture
-  const handlePlay = () => {
-    // Vérifie si le contexte audio existe et est suspendu
-    if (audioContext && audioContext.state === 'suspended') {
-      // Reprend le contexte audio. C'est l'action clé !
-      audioContext.resume();
-      console.log('🎵 AudioContext resumed from suspended state');
-    }
-  }
 
   return (
       <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#000' }}>
@@ -154,20 +117,99 @@ function App() {
           overflowY: 'auto'
         }}>
           <h2 style={{ margin: '0 0 10px 0' }}>AuraSync - Enhanced Audio Analysis</h2>
-          <input
-              type="file"
-              accept="audio/*"
-              onChange={handleFileUpload}
-              style={{ marginBottom: '10px' }}
-          />
-          <br />
-          {/* 3. Ajoutez l'événement onPlay ici */}
-          <audio
-              ref={audioRef}
-              controls
-              onPlay={handlePlay} // <-- LA MODIFICATION IMPORTANTE
-              style={{ width: '200px' }}
-          />
+
+          {/* Audio Source Selection */}
+          <div style={{
+            marginBottom: '15px',
+            padding: '10px',
+            background: 'rgba(255,255,255,0.1)',
+            borderRadius: '4px'
+          }}>
+            <h4 style={{ margin: '0 0 10px 0', color: '#88ff88' }}>🎵 Audio Source</h4>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                  onClick={() => switchAudioSource('file')}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: sourceType === 'file' ? '#0066cc' : 'rgba(255,255,255,0.1)',
+                    border: '1px solid #333',
+                    borderRadius: '4px',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    transition: 'all 0.2s'
+                  }}
+              >
+                📁 File
+              </button>
+              <button
+                  onClick={() => switchAudioSource('microphone')}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: sourceType === 'microphone' ? '#cc0066' : 'rgba(255,255,255,0.1)',
+                    border: '1px solid #333',
+                    borderRadius: '4px',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    transition: 'all 0.2s'
+                  }}
+              >
+                🎤 Microphone
+              </button>
+            </div>
+          </div>
+
+          {/* File Upload - Only show when file source is selected */}
+          {sourceType === 'file' && (
+              <>
+                <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={handleFileUpload}
+                    style={{ marginBottom: '10px' }}
+                />
+                <br />
+                <audio
+                    ref={audioRef}
+                    controls
+                    style={{ width: '200px' }}
+                />
+              </>
+          )}
+
+          {/* Microphone Status - Only show when microphone is selected */}
+          {sourceType === 'microphone' && (
+              <div style={{
+                padding: '10px',
+                background: 'rgba(204,0,102,0.2)',
+                borderRadius: '4px',
+                marginBottom: '10px'
+              }}>
+                <p style={{ margin: 0, fontSize: '12px' }}>
+                  🎤 Microphone Active
+                  <span style={{
+                    display: 'inline-block',
+                    width: '8px',
+                    height: '8px',
+                    background: '#ff0000',
+                    borderRadius: '50%',
+                    marginLeft: '10px',
+                    animation: 'pulse 1.5s infinite'
+                  }}></span>
+                </p>
+              </div>
+          )}
+
+          {/* Hidden audio element for file source */}
+          {sourceType !== 'file' && (
+              <audio
+                  ref={audioRef}
+                  style={{ display: 'none' }}
+              />
+          )}
 
           {/* Basic Audio Metrics */}
           <div style={{ marginTop: '15px', fontSize: '12px', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
