@@ -106,7 +106,7 @@ function App() {
 
   const handlePlay = async () => {
     console.log('🎵 handlePlay called');
-    
+
     // Vérifie si le contexte audio existe et est suspendu
     if (audioContext && audioContext.state === 'suspended') {
       try {
@@ -116,7 +116,7 @@ function App() {
         console.error('❌ Failed to resume AudioContext in handlePlay:', error);
       }
     }
-    
+
     // Force la reconnexion de la source si nécessaire
     if (sourceType === 'file' && switchAudioSource) {
       console.log('🔄 Re-initializing file source on play');
@@ -173,60 +173,60 @@ function App() {
 
           {/* --- NOUVEAU: Panneau de sélection de la source --- */}
           <div style={{ marginBottom: '15px', padding: '10px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px' }}>
-              <h4 style={{ margin: '0 0 10px 0', color: '#88ff88' }}>🎵 Source Audio</h4>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={() => switchAudioSource('file')}
-                    style={{
-                      flex: 1,
-                      padding: '8px',
-                      background: sourceType === 'file' ? '#0066cc' : '#333',
-                      border: '1px solid #555',
-                      borderRadius: '4px',
-                      color: 'white',
-                      cursor: 'pointer',
-                      transition: 'background 0.2s'
-                    }}
-                  >
-                      📁 Fichier
-                  </button>
-                  <button
-                    onClick={() => switchAudioSource('microphone')}
-                    style={{
-                      flex: 1,
-                      padding: '8px',
-                      background: sourceType === 'microphone' ? '#cc0066' : '#333',
-                      border: '1px solid #555',
-                      borderRadius: '4px',
-                      color: 'white',
-                      cursor: 'pointer',
-                      transition: 'background 0.2s'
-                    }}
-                  >
-                      🎤 Micro
-                  </button>
-              </div>
+            <h4 style={{ margin: '0 0 10px 0', color: '#88ff88' }}>🎵 Source Audio</h4>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                  onClick={() => switchAudioSource('file')}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: sourceType === 'file' ? '#0066cc' : '#333',
+                    border: '1px solid #555',
+                    borderRadius: '4px',
+                    color: 'white',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+              >
+                📁 Fichier
+              </button>
+              <button
+                  onClick={() => switchAudioSource('microphone')}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: sourceType === 'microphone' ? '#cc0066' : '#333',
+                    border: '1px solid #555',
+                    borderRadius: '4px',
+                    color: 'white',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+              >
+                🎤 Micro
+              </button>
+            </div>
           </div>
 
           {/* --- NOUVEAU: Affichage conditionnel basé sur la source --- */}
           {sourceType === 'file' && (
               <div id="file-controls" style={{ marginBottom: '15px' }}>
-                  <input
+                <input
                     type="file"
                     accept="audio/*"
                     onChange={handleFileUpload}
                     style={{ marginBottom: '10px', color: 'white' }}
-                  />
-                  <br />
-                  <audio
-                      ref={audioRef}
-                      controls
-                      onPlay={handlePlay}
-                      style={{ width: '200px', marginBottom: '10px' }}
-                  />
-                  {/* Bouton de démarrage d'urgence */}
-                  <div>
-                    <button
+                />
+                <br />
+                <audio
+                    ref={audioRef}
+                    controls
+                    onPlay={handlePlay}
+                    style={{ width: '200px', marginBottom: '10px' }}
+                />
+                {/* Bouton de démarrage d'urgence */}
+                <div>
+                  <button
                       onClick={async () => {
                         console.log('🚀 Force start analysis button clicked');
                         if (switchAudioSource) {
@@ -242,10 +242,10 @@ function App() {
                         cursor: 'pointer',
                         fontSize: '12px'
                       }}
-                    >
-                      🚀 Force Start Analysis
-                    </button>
-                  </div>
+                  >
+                    🚀 Force Start Analysis
+                  </button>
+                </div>
               </div>
           )}
 
@@ -257,27 +257,27 @@ function App() {
                 marginBottom: '15px',
                 border: '1px solid rgba(204,0,102,0.5)'
               }}>
-                  <p style={{ margin: 0, fontSize: '12px', display: 'flex', alignItems: 'center' }}>
-                      🎤 Microphone Actif
-                      <span style={{
-                        display: 'inline-block',
-                        width: '8px',
-                        height: '8px',
-                        background: '#ff0000',
-                        borderRadius: '50%',
-                        marginLeft: '10px',
-                        animation: 'pulse 1.5s infinite'
-                      }}></span>
-                  </p>
-                  <style>
-                    {`
+                <p style={{ margin: 0, fontSize: '12px', display: 'flex', alignItems: 'center' }}>
+                  🎤 Microphone Actif
+                  <span style={{
+                    display: 'inline-block',
+                    width: '8px',
+                    height: '8px',
+                    background: '#ff0000',
+                    borderRadius: '50%',
+                    marginLeft: '10px',
+                    animation: 'pulse 1.5s infinite'
+                  }}></span>
+                </p>
+                <style>
+                  {`
                       @keyframes pulse {
                         0% { opacity: 1; }
                         50% { opacity: 0.5; }
                         100% { opacity: 1; }
                       }
                     `}
-                  </style>
+                </style>
               </div>
           )}
 
@@ -291,7 +291,7 @@ function App() {
                 fontSize: '12px',
                 color: '#aaa'
               }}>
-                  Sélectionnez une source audio pour commencer l'analyse
+                Sélectionnez une source audio pour commencer l'analyse
               </div>
           )}
 

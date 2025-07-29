@@ -635,13 +635,28 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
       fileGainNodeRef.current.gain.value = 0;
       micGainNodeRef.current.gain.value = 0;
 
-      // Connecter les GainNodes à l'analyseur
+      // ### DEBUT DE LA MODIFICATION ###
+      // Le routage audio est modifié ici pour corriger le problème de feedback.
+
+      // 1. Connecter les deux sources (via leurs GainNodes) à l'analyseur.
+      //    Ceci est pour la *visualisation* uniquement.
       fileGainNodeRef.current.connect(analyser);
       micGainNodeRef.current.connect(analyser);
+      console.log('✓ Sources (fichier/micro) connectées à l\'analyseur pour la visualisation.');
 
-      // Connecter l'analyseur à la destination (haut-parleurs) pour la source fichier
-      // Le micro ne sera pas connecté à la destination pour éviter le larsen
-      analyser.connect(context.destination);
+      // 2. Connecter UNIQUEMENT la source fichier à la destination (haut-parleurs).
+      //    Ceci est pour la *lecture audio*.
+      fileGainNodeRef.current.connect(context.destination);
+      console.log('✓ Source fichier connectée à la destination pour la lecture.');
+      console.log('✗ Source microphone NON connectée à la destination. Feedback évité.');
+
+
+      // L'ANCIENNE LIGNE DE CODE QUI CAUSAIT LE PROBLEME :
+      // analyser.connect(context.destination);
+      // Cette ligne envoyait tout ce qui était analysé (y compris le micro)
+      // vers les haut-parleurs, créant une boucle de feedback.
+
+      // ### FIN DE LA MODIFICATION ###
 
       console.log('🎛️ AudioContext et GainNodes initialisés. Sample Rate:', context.sampleRate);
 
@@ -703,7 +718,7 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
           fileSourceNodeRef.current.connect(fileGainNodeRef.current!);
           console.log('🎵 Source fichier connectée.');
         } catch (error) {
-           // L'erreur "InvalidStateNode" peut se produire si on essaie de reconnecter. C'est normal.
+          // L'erreur "InvalidStateNode" peut se produire si on essaie de reconnecter. C'est normal.
           if (error instanceof DOMException && error.name === 'InvalidStateError') {
             console.warn('Source fichier déjà connectée.');
           } else {
@@ -745,18 +760,18 @@ export function useAudioAnalyzer(audioSource?: HTMLAudioElement) {
     }
     // Gérer l'état SANS SOURCE
     else {
-        if (fileGainNodeRef.current) fileGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
-        if (micGainNodeRef.current) micGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
-        if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach(track => track.stop());
-            mediaStreamRef.current = null;
-            if (micSourceNodeRef.current) {
-                micSourceNodeRef.current.disconnect();
-                micSourceNodeRef.current = null;
-            }
+      if (fileGainNodeRef.current) fileGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
+      if (micGainNodeRef.current) micGainNodeRef.current.gain.setValueAtTime(0, context.currentTime);
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+        if (micSourceNodeRef.current) {
+          micSourceNodeRef.current.disconnect();
+          micSourceNodeRef.current = null;
         }
-        setSourceType('none');
-        console.log('⏹️ Aucune source audio active.');
+      }
+      setSourceType('none');
+      console.log('⏹️ Aucune source audio active.');
     }
   };
 
