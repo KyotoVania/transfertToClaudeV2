@@ -8,7 +8,7 @@ import { ConfigPanel } from './components/ConfigPanel'
 
 function App() {
   const audioRef = useRef<HTMLAudioElement>(null)
-  const { audioData, sourceType, switchAudioSource } = useAudioAnalyzer(audioRef.current || undefined)
+  const audioData = useAudioAnalyzer(audioRef.current || undefined)
   const { global: globalConfig } = useConfigStore()
   const currentUrlRef = useRef<string | null>(null)
 
@@ -117,99 +117,18 @@ function App() {
           overflowY: 'auto'
         }}>
           <h2 style={{ margin: '0 0 10px 0' }}>AuraSync - Enhanced Audio Analysis</h2>
-
-          {/* Audio Source Selection */}
-          <div style={{
-            marginBottom: '15px',
-            padding: '10px',
-            background: 'rgba(255,255,255,0.1)',
-            borderRadius: '4px'
-          }}>
-            <h4 style={{ margin: '0 0 10px 0', color: '#88ff88' }}>🎵 Audio Source</h4>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                  onClick={() => switchAudioSource('file')}
-                  style={{
-                    flex: 1,
-                    padding: '8px',
-                    background: sourceType === 'file' ? '#0066cc' : 'rgba(255,255,255,0.1)',
-                    border: '1px solid #333',
-                    borderRadius: '4px',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    transition: 'all 0.2s'
-                  }}
-              >
-                📁 File
-              </button>
-              <button
-                  onClick={() => switchAudioSource('microphone')}
-                  style={{
-                    flex: 1,
-                    padding: '8px',
-                    background: sourceType === 'microphone' ? '#cc0066' : 'rgba(255,255,255,0.1)',
-                    border: '1px solid #333',
-                    borderRadius: '4px',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    transition: 'all 0.2s'
-                  }}
-              >
-                🎤 Microphone
-              </button>
-            </div>
-          </div>
-
-          {/* File Upload - Only show when file source is selected */}
-          {sourceType === 'file' && (
-              <>
-                <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={handleFileUpload}
-                    style={{ marginBottom: '10px' }}
-                />
-                <br />
-                <audio
-                    ref={audioRef}
-                    controls
-                    style={{ width: '200px' }}
-                />
-              </>
-          )}
-
-          {/* Microphone Status - Only show when microphone is selected */}
-          {sourceType === 'microphone' && (
-              <div style={{
-                padding: '10px',
-                background: 'rgba(204,0,102,0.2)',
-                borderRadius: '4px',
-                marginBottom: '10px'
-              }}>
-                <p style={{ margin: 0, fontSize: '12px' }}>
-                  🎤 Microphone Active
-                  <span style={{
-                    display: 'inline-block',
-                    width: '8px',
-                    height: '8px',
-                    background: '#ff0000',
-                    borderRadius: '50%',
-                    marginLeft: '10px',
-                    animation: 'pulse 1.5s infinite'
-                  }}></span>
-                </p>
-              </div>
-          )}
-
-          {/* Hidden audio element for file source */}
-          {sourceType !== 'file' && (
-              <audio
-                  ref={audioRef}
-                  style={{ display: 'none' }}
-              />
-          )}
+          <input
+              type="file"
+              accept="audio/*"
+              onChange={handleFileUpload}
+              style={{ marginBottom: '10px' }}
+          />
+          <br />
+          <audio
+              ref={audioRef}
+              controls
+              style={{ width: '200px' }}
+          />
 
           {/* Basic Audio Metrics */}
           <div style={{ marginTop: '15px', fontSize: '12px', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
